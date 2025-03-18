@@ -13,7 +13,7 @@ class DeviceCollection:
         self.outlets = {}
         self.motors = {}
         self.radiometers = {}
-        self.fpga = FPGADevice("/dev/runcontrol")
+        #self.fpga = FPGADevice("/dev/runcontrol")
 
     def init(self, cfg):
         # outlets
