@@ -60,7 +60,7 @@ class CLF_app(cmd2.Cmd):
             port_params = cfg.get_port_params(oparams['port'])
             dc.add_outlet(oparams['id'], oname,
                 port=port_params['port'],
-                speed=port_params['speed'],
+                baudrate=port_params['baudrate'],
                 bytesize=port_params['bytesize'],
                 parity=port_params['parity'],
                 stopbits=port_params['stopbits'],
@@ -187,7 +187,7 @@ class CLF_app(cmd2.Cmd):
             port_params = cfg.get_port_params(mparams['port'])
             dc.add_motor(mparams['id'], mname,
                 port=port_params['port'],
-                speed=port_params['speed'],
+                baudrate=port_params['baudrate'],
                 bytesize=port_params['bytesize'],
                 parity=port_params['parity'],
                 stopbits=port_params['stopbits'],
