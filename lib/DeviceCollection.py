@@ -28,7 +28,9 @@ class DeviceCollection:
         # motors
         for mname, mparams in cfg.motors.items():
             port_params = cfg.get_port_params(mparams['port'])
-            self.add_motor(mparams['id'], mname, **port_params)
+            ecal_position = mparams.get('ecal_position', 0)
+            pcal_position = mparams.get('pcal_position', 0)
+            self.add_motor(mparams['id'], mname, ecal_position, pcal_position, **port_params)
 
         # radiometers 
         for rname, rparams in cfg.radiometers.items():
@@ -49,16 +51,18 @@ class DeviceCollection:
     def get_outlet(self, name):
         return self.outlets[name]
 
-    def add_motor(self, id, name, port, baudrate=115200, bytesize=8, parity='N', stopbits=1, timeout=1):
+    def add_motor(self, id, name, ecal_position, pcal_position, port, baudrate=115200, bytesize=8, parity='N', stopbits=1, timeout=1):
         if(self.serials.get(port, None) == None):
             params = locals()
             params.pop('self')
             params.pop('id')
             params.pop('name')
+            params.pop('ecal_position')
+            params.pop('pcal_position')
             self.serials[port] = VXM(**params)
 
         vxm = self.serials[port]
-        self.motors[name] = vxm.add_motor(id, name)
+        self.motors[name] = vxm.add_motor(id, name, ecal_position, pcal_position)
 
     def get_motor(self, name):
         return self.motors[name]

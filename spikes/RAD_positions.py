@@ -41,7 +41,7 @@ if __name__ == "__main__":
 
     dc.get_motor("UpEastWest").set_ABSzero()
     # dc.get_motor("UpEastWest").move_ABS(4470) # CLF
-    dc.get_motor("UpEastWest").move_ABS(8500) # XLF
+    #dc.get_motor("UpEastWest").move_ABS(8500) # XLF
 
     # motor
     dc.get_motor("UpNorthSouth").init()  
@@ -50,7 +50,7 @@ if __name__ == "__main__":
 
     dc.get_motor("UpNorthSouth").set_ABSzero()
     # dc.get_motor("UpNorthSouth").move_ABS(33250)  # CLF
-    dc.get_motor("UpNorthSouth").move_ABS(34250)  # XLF
+    #dc.get_motor("UpNorthSouth").move_ABS(34250)  # XLF
 
     # motor
     dc.get_motor("LwNorthSouth").init()  
@@ -59,7 +59,7 @@ if __name__ == "__main__":
 
     dc.get_motor("LwNorthSouth").set_ABSzero()
     # dc.get_motor("LwNorthSouth").move_ABS(18900)  # CLF
-    dc.get_motor("LwNorthSouth").move_ABS(18900)  # XLF
+    #dc.get_motor("LwNorthSouth").move_ABS(18900)  # XLF
 
     # motor
     dc.get_motor("LwPolarizer").init()  
@@ -67,7 +67,7 @@ if __name__ == "__main__":
     dc.get_motor("LwPolarizer").move_Neg0()  
 
     dc.get_motor("LwPolarizer").set_ABSzero()
-    dc.get_motor("LwPolarizer").move_ABS(90 * 80)
+    #dc.get_motor("LwPolarizer").move_ABS(90 * 80)
 
     # motor
     # command to open (Neg0 = open)
