@@ -70,7 +70,7 @@ class Centurion:
     @check_open
     def read_response(self):
         try:
-            response = str(self.serial.read(255).decode())
+            response = ''.join(filter(str.isalnum, str(self.serial.read(255).decode())))
             self.log(logging.INFO, response)
             return response
         except serial.SerialException: 
