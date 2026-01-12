@@ -1,5 +1,6 @@
 import serial
 import re
+import time
 
 class RPCDevice:
 
@@ -40,67 +41,68 @@ class RPCDevice:
 
     @check_open
     def wait_prompt(self):
-        self.serial.write("\n\r".encode())
-        n = 0
-        while True:
-            for line in self.serial.readlines():
-                if line.decode('utf-8','ignore').startswith("RPC>"):
-                    return
-            n += 1
-            if n % 5 == 0:
-                self.serial.write("\n\r".encode())
+        output = ""
+        self.serial.reset_input_buffer()
+        self.serial.reset_output_buffer()
+        self.serial.write('\r\n'.encode('utf-8'))
+        self.serial.flush()
+        while "RPC>" not in output:
+            buffer = self.serial.read_all().decode('utf-8', 'ignore')
+            output += buffer
 
-    @check_open
-    def on(self):
-        for _ in range(5):
-            self.serial.reset_output_buffer()
-            self.serial.reset_input_buffer()
-            self.wait_prompt()
-            self.serial.write(f"on {self.id}\r".encode())
-            self.serial.flush()
-            found = False
-            while not found:
-                for line in self.serial.readlines():
-                    if line.decode('utf-8','ignore').startswith("Turn On"):
-                        found = True
-                        break
-            self.serial.write(b"y\r")  # confirm command 
-            if self.status() == 1:
-                return True
-        print(f"RPC:ON:ERROR:Outlet {self.id} did not turn ON.")
-        return False
-
-    @check_open
-    def off(self):
-        for _ in range(5):
-            self.serial.reset_output_buffer()
-            self.serial.reset_input_buffer()
-            self.wait_prompt()
-            self.serial.write(f"off {self.id}\r".encode())
-            self.serial.flush()
-            found = False
-            while not found:
-                for line in self.serial.readlines():
-                    if line.decode('utf-8','ignore').startswith("Turn Off"):
-                        found = True
-                        break
-            self.serial.write(b"y\r")  # confirm command 
-            if self.status() == 0:
-                return True
-        print(f"RPC:ON:ERROR:Outlet {self.id} did not turn OFF.")
-        return False
+        time.sleep(0.2)
+        return output
 
     @check_open
     def status(self):
-        self.wait_prompt()
-        self.serial.write(b"\n\r")
+        output = self.wait_prompt()
+        lines = output.splitlines()
+
         map = {}
-        for line in self.serial.readlines():
-            match = re.match(r"([1-6])\)\.{3}(.*): (On|Off)", line.decode("utf-8",'ignore'))
+        for line in lines:
+            match = re.match(r"([1-6])\)\.{3}(.*): (On|Off)", line)
             if match:
                 map[match.group(1)] = {"device": str.rstrip(match.group(2)), "state": match.group(3)}
-        return str.lower(map[str(self.id)]['state']) == 'on'
 
+        return str.lower(map[str(self.id)]['state']) == 'on'        
+
+    def set(self, id, state):
+        cmd = ["off", "on"]
+
+        self.wait_prompt()
+        self.serial.write(f"{cmd[state]} {id}\r\n".encode())
+        self.serial.flush()
+        output = ""
+        while True:
+            buffer = self.serial.read_all().decode('utf-8', 'ignore')
+            output += buffer
+            if "(Y/N)?" in output:
+                break
+            if "ERROR" in output:
+                self.serial.reset_input_buffer()
+                self.serial.reset_output_buffer()
+                self.serial.flush()
+                self.wait_prompt()
+                self.serial.write(f"{cmd[state]} {id}\r\n".encode())
+                self.serial.flush()
+                output = ""                
+
+        self.serial.write(b"y\r\n")  # confirm command
+        self.serial.write('\r\n'.encode('utf-8'))
+        self.serial.flush()
+
+        if self.status() == state:
+            return True
+
+        return False
+
+    @check_open
+    def on(self):
+        return self.set(self.id, 1)
+
+    @check_open
+    def off(self):
+        return self.set(self.id, 0)
 
 class RPCOutlet(RPCDevice):
 
