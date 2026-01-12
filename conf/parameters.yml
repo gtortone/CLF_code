@@ -1,17 +1,16 @@
-#identity:   CLF
-identity:   XLF
+#identity:   clf
+identity:   xlf
 
-CLF:
+clf:
   run_list: [fd, tank, raman, calib]
   fd_pps_delay:  24982000
   tank_pps_delay: 49982000
   start_minutes: [5, 20, 35, 50]
   tank_name: celeste
 
-XLF:
+xlf:
   run_list: [fd, tank, calib]
   fd_pps_delay:  34982000
   tank_pps_delay: 69982000
   start_minutes: [5, 20, 35, 50]
   tank_name: ramiro 
-
