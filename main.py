@@ -181,6 +181,9 @@ class App(cmd2.Cmd):
     pdu_status_parser = pdu_subparser.add_parser("status", help='show pdu status')
 
     def pduon(self, args):
+        if self.mode == 'auto':
+            print("E: set mode to manual")
+            return
         for k,v in self.dc.outlets.items():
             if v.id == args.num:
                 v.on()
@@ -188,6 +191,9 @@ class App(cmd2.Cmd):
         print(f"E: outlet {args.num} not available")
 
     def pduoff(self, args):
+        if self.mode == 'auto':
+            print("E: set mode to manual")
+            return
         for k,v in self.dc.outlets.items():
             if v.id == args.num:
                 v.off()
@@ -195,6 +201,9 @@ class App(cmd2.Cmd):
         print(f"E: outlet {args.num} not available")
 
     def pdustatus(self, args):
+        if self.mode == 'auto':
+            print("E: set mode to manual")
+            return
         status = ["off", "on"]
         for k,v in self.dc.outlets.items():
             print(f"{v.id} {k} {status[v.status()]}")

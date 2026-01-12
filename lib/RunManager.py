@@ -107,7 +107,6 @@ class RunManager:
                 if self.runentry.runtype == RunType.FD:
                     self.run = RunFD(self.dc, self.params)
                 elif self.runentry.runtype == RunType.RAMAN:
-                    #self.log(logging.INFO, "skipping Raman run for debug reasons") #self.run = RunRaman(self.dc)
                     self.run = RunRaman(self.dc, self.params)
                 elif self.runentry.runtype == RunType.TANK:
                     self.run = RunTank(self.dc, self.params)
@@ -128,13 +127,13 @@ class RunManager:
         else:
             self.log(logging.ERROR, f"{self.runentry.runtype.name} run cannot start due to other job running")
 
-    def stop(self):
-        if self.job_is_running():
-            self.job.terminate()
-            self.job = multiprocessing.Process(target=self.run.abort)
-            self.job.start()
-            return 0
-        return -1
+    #def stop(self):
+    #    if self.job_is_running():
+    #        self.job.terminate()
+    #        self.job = multiprocessing.Process(target=self.run.abort)
+    #        self.job.start()
+    #        return 0
+    #    return -1
 
     def kill(self):
         if self.job_is_running():

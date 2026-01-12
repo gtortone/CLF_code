@@ -34,6 +34,7 @@ if __name__ == "__main__":
 
     time.sleep(1)
 
+    # ECAL
     # motor
     dc.get_motor("UpEastWest").init()  
     dc.get_motor("UpEastWest").move_Neg0()  
@@ -52,6 +53,7 @@ if __name__ == "__main__":
     # dc.get_motor("UpNorthSouth").move_ABS(33250)  # CLF
     #dc.get_motor("UpNorthSouth").move_ABS(34250)  # XLF
 
+    # PCAL
     # motor
     dc.get_motor("LwNorthSouth").init()  
     dc.get_motor("LwNorthSouth").move_Neg0()  

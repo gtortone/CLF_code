@@ -3,7 +3,7 @@ LwNorthSouth:
   port: "Motor_calib"
   id: 1
   ecal_position: 0
-  pcal_position: 456
+  pcal_position: 18900
 
 LwPolarizer:
   port: "Motor_calib"
@@ -14,14 +14,14 @@ LwPolarizer:
 UpNorthSouth:
   port: "Motor_calib"
   id: 3
-  ecal_position: 666
-  pcal_position: 666
+  ecal_position: 34250
+  pcal_position: 34250
 
 UpEastWest:
   port: "Motor_calib"
   id: 4
-  ecal_position: 777
-  pcal_position: 777
+  ecal_position: 8500
+  pcal_position: 8500
 
 Cover:
   port: "Cover_box_steering"

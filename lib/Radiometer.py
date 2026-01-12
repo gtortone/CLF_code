@@ -1,4 +1,8 @@
 import serial
+import logging
+import datetime
+from functools import partial
+from logging.handlers import TimedRotatingFileHandler
 
 RADIOMETER_WAIT = 2
 
@@ -21,6 +25,17 @@ class Radiometer:
             raise e
 
         self.serial.port = port
+
+        self.logger = logging.getLogger("device")
+        self.logger.setLevel(logging.INFO)
+        if not self.logger.handlers:
+            formatter = logging.Formatter('%(asctime)s - %(classname)s::%(funcName)s - %(levelname)s - %(message)s')
+            handler = TimedRotatingFileHandler('logs/device.log', when='midnight',
+                atTime=datetime.time(hour=18, minute=0))
+            handler.setFormatter(formatter)
+            self.logger.addHandler(handler)
+        self.log = partial(self.logger.log, extra={'classname': self.__class__.__name__})
+
 
     def open(self):
         try:
@@ -125,9 +140,10 @@ class Radiometer3700(Radiometer):
             self.set("RA", 2)
             self.get("AD")
         except Exception as e:
-            print(f"RADM_MON_{self.model}:SET_UP:ERROR:Some problem occurred: {e}")
-
-        print(f"RADM_MON_{self.model}:SET_UP done")
+            #print(f"RADM_MON_{self.model}:SET_UP:ERROR:Some problem occurred: {e}")
+            self.log(logging.ERROR, f"RADM_MON_{self.model}:SET_UP:ERROR:Some problem occurred: {e}")
+            
+        self.log(logging.INFO, f"RADM_MON_{self.model}:SET_UP: Radiometer setup completed")
         self.ready = True
 
     def set_range(self, range):
@@ -135,9 +151,18 @@ class Radiometer3700(Radiometer):
         self.set("RA", range)
 
     def read_power(self):
+        value = 0
         if (self.ready == True):
             # 10-3 Joule unit
-            return self.serial.read_until("\r".encode())[:-1].decode(errors='ignore')
+            for i in range(0,5):
+                try:
+                    value = float(self.serial.read_until("\r".encode())[:-1].decode(errors='ignore'))
+                except:
+                    continue
+                else:
+                    return value
+
+            return -1
         else:
             print(f"RADM_MON_{self.model}:ERROR Radiometer not ready")
 
@@ -199,17 +224,26 @@ class RadiometerOphir(Radiometer):
     def setup(self):
         try:
             self.flush_buffers()
-            self.set("DU", 1)
+            self.set("$DU", 1)
         except Exception as e:
-            print(f"RADM_MON_{self.model}:SET_UP:ERROR:Some problem occurred: {e}")
+            #print(f"RADM_MON_{self.model}:SET_UP:ERROR:Some problem occurred: {e}")
+            self.log(logging.ERROR, f"RADM_MON_{self.model}:SET_UP:ERROR:Some problem occurred: {e}")
 
-        print(f"RADM_MON_{self.model}:SET_UP done")
+        #print(f"RADM_MON_{self.model}:SET_UP done")
+        self.log(logging.INFO, f"RADM_MON_{self.model}:SET_UP: Radiometer setup completed")
         self.ready = True
 
     def read_power(self):
         if (self.ready == True):
             # 10-3 Joule unit
-            return self.serial.read_until("\r".encode())[:-1].decode(errors='ignore')
+            result = self.serial.read_until("\r".encode())[:-1].decode(errors='ignore')
+            if "*" in result:
+                result = result.replace("*", "")
+                try:
+                    result = float(result)
+                except:
+                    return -1
+            return result
         else:
             print(f"RADM_MON_{self.model}:ERROR Radiometer not ready")
     

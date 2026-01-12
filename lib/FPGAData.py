@@ -1,62 +1,76 @@
-import serial
 import time
+import serial
 
 class FPGAData:
+    _instance = None
 
-    __instance = None
+    def __new__(cls, *args, **kwargs):
+        if cls._instance is None:
+            cls._instance = super(FPGAData, cls).__new__(cls)
+        return cls._instance
 
-    @staticmethod
-    def getInstance():
-        if FPGAData.__instance == None:
-            raise Exception("Class FPGAData - no instance")
-        return FPGAData.__instance
-
-    def __init__(self, port, baudrate = 115200):
-        if FPGAData.__instance != None:
-            raise Exception("Class FPGAData - use existing instance")
-        else:
-            FPGAData.__instance = self
+    def __init__(self, port, baudrate=115200):
+        if hasattr(self, "_initialized") and self._initialized:
+            return
+        self._initialized = True
 
         self.port = port
         self.baudrate = baudrate
-        self.serial = None
         self.HEADER = 'BAAB'
         self.FOOTER = 'FEEF'
-        self.PACKET_SIZE = 40  # 4 byte di header + 12 byte di dati + 4 byte di footer
+        self.PACKET_SIZE = 40  # Verifica questa lunghezza!
+        self.buffer = ""
+        self.start_idx =0
+        self.end_idx=0
 
         try:
-            self.serial = serial.Serial(self.port, self.baudrate, timeout = 2)
+            self.serial = serial.Serial(self.port, self.baudrate, timeout=0.5)
         except serial.SerialException as e:
-            raise RuntimeError
+            raise RuntimeError(f"Errore apertura porta seriale: {e}")
 
     def read_event(self):
-        
-            self.buffer = self.serial.read(self.PACKET_SIZE)  # Legge il pacchetto intero
+        # Leggi tutto ciò che è disponibile
+        #self.buffer += self.serial.read_all().decode('utf-8', 'ignore')
+        data=""
+        n_try=0
+        # Cerca pacchetto completo
+        while n_try < 10: 
+            self.buffer = self.serial.read_all().decode('utf-8', 'ignore')
+            data+= self.buffer
             
-            # Cerca l'header
-            start_idx = self.buffer.find(self.HEADER.encode())
-            if start_idx != -1 and len(self.buffer) >= start_idx + self.PACKET_SIZE:
-                packet = self.buffer[start_idx:start_idx + self.PACKET_SIZE]
+            #print(self.buffer)
+            #print(len(data),data)
+            self.start_idx = data.find(self.HEADER)
+            self.end_idx = data.find(self.FOOTER)
+            time.sleep(0.2)
+            n_try +=1
+            if self.start_idx != -1 and self.end_idx !=-1:
+                #print(self.start_idx, self.end_idx)
+                break
 
-                if packet[-5:-1] == self.FOOTER.encode():
-                    data = packet[5:-5]
-                    try:
-                        values = data.decode().split('\r')[:-1]
-                        self.seconds = (int(values[0], 16) << 16) + int(values[1], 16)
-                        self.counter = (int(values[2], 16) << 16) + int(values[3], 16) * 10
-                        #self.length = (int(values[4], 16) << 16) + int(values[5], 16) * 10
-                        self.pps_delta = (int(values[4], 16) - 32767) * 10
-                        self.counter_pulses = int(values[5], 16)
-                        return self.seconds, self.counter, self.pps_delta, self.counter_pulses
-                    except (IndexError, ValueError, UnicodeDecodeError) as e:
-                        print("Errore nel parsing dei dati:", e)
-                else:
-                    print("Errore: pacchetto non valido!")
+        #print(data,end="")
+        #for c in data:
+        #    print(c)
+        
+        packet = data[self.start_idx:self.end_idx + len(self.FOOTER)]
+        #print("ok"+packet)# Rimuovi il pacchetto dal buffer
+        self.buffer = ""   #self.buffer[end_idx + len(self.FOOTER):]
+        return self._parse_packet(packet)
 
-            # Se il pacchetto non Ã¨ valido o non Ã¨ stato trovato
-            self.seconds = 0
-            self.counter = 0
-            self.pps_delta = 0
-            self.counter_pulses=0
-                
-            return self.seconds, self.counter, self.pps_delta, self.counter_pulses
+
+    def _parse_packet(self, packet):
+        data = packet[len(self.HEADER):-len(self.FOOTER)]
+        try:
+            values = data.strip().split('\r')
+            if len(values) < 6:
+                raise ValueError("Dati incompleti")
+
+            seconds = (int(values[0], 16) << 16) + int(values[1], 16)
+            counter = (int(values[2], 16) << 16) + int(values[3], 16) * 10
+            pps_delta = (int(values[4], 16) - 32767) * 10
+            counter_pulses = int(values[5], 16)
+
+            return seconds, counter, pps_delta, counter_pulses
+        except Exception as e:
+            #print(f"Errore parsing: {e}")
+            return 0, 0, 0, 0

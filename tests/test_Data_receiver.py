@@ -10,4 +10,7 @@ data = FPGAData("/dev/data0")
 
 
 for i in range(10):
-    data.read_event()
+    print(i)
+    time.sleep(1)
+    results=data.read_event()
+    print(results)
