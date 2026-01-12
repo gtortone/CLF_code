@@ -9,6 +9,15 @@ VXM_COMMAND = 255
 VXM_RETURN = 50
 VMX_WAIT = 800000
 
+logger = logging.getLogger("device")
+logger.setLevel(logging.INFO)
+if not logger.handlers:
+    formatter = logging.Formatter('%(asctime)s - %(classname)s::%(funcName)s - %(levelname)s - %(message)s')
+    handler = TimedRotatingFileHandler('logs/device.log', when='midnight',
+        atTime=datetime.time(hour=18, minute=0))
+    handler.setFormatter(formatter)
+    logger.addHandler(handler)
+
 class VXM:
 
     def __init__(self, port, baudrate = 9600, bytesize=8, parity='N', stopbits=1, timeout=1, string_return = 255):
@@ -43,15 +52,10 @@ class VXM:
 
         self.serial.port = port
 
-        self.logger = logging.getLogger("device")
-        self.logger.setLevel(logging.INFO)
-        if not self.logger.handlers:
-            formatter = logging.Formatter('%(asctime)s - %(classname)s::%(funcName)s - %(levelname)s - %(message)s')
-            handler = TimedRotatingFileHandler('logs/device.log', when='midnight',
-                atTime=datetime.time(hour=18, minute=0))
-            handler.setFormatter(formatter)
-            self.logger.addHandler(handler)
-        self.log = partial(self.logger.log, extra={'classname': self.__class__.__name__})
+        self.log = partial(logger.log, extra={'classname': self.__class__.__name__})
+
+        #FIXME
+        self.log(logging.INFO, f"TEST from VXM class")
 
     def open(self):
         try:
@@ -76,15 +80,10 @@ class VXM:
             self.pcal_position = pcal_position
             self.string_return = 255
 
-            self.logger = logging.getLogger("device")
-            self.logger.setLevel(logging.INFO)
-            if not self.logger.handlers:
-                formatter = logging.Formatter('%(asctime)s - %(classname)s::%(funcName)s - %(levelname)s - %(message)s')
-                handler = TimedRotatingFileHandler('logs/device.log', when='midnight',
-                    atTime=datetime.time(hour=18, minute=0))
-                handler.setFormatter(formatter)
-                self.logger.addHandler(handler)
-            self.log = partial(self.logger.log, extra={'classname': self.__class__.__name__})
+            self.log = partial(logger.log, extra={'classname': self.__class__.__name__})
+        
+            #FIXME
+            self.log(logging.INFO, f"TEST from Motor class")
 
         def check_open(func):
             def wrapper(self, *args, **kwargs):
