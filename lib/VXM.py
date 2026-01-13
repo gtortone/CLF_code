@@ -54,9 +54,6 @@ class VXM:
 
         self.log = partial(logger.log, extra={'classname': self.__class__.__name__})
 
-        #FIXME
-        self.log(logging.INFO, f"TEST from VXM class")
-
     def open(self):
         try:
             self.serial.open()
@@ -82,9 +79,6 @@ class VXM:
 
             self.log = partial(logger.log, extra={'classname': self.__class__.__name__})
         
-            #FIXME
-            self.log(logging.INFO, f"TEST from Motor class")
-
         def check_open(func):
             def wrapper(self, *args, **kwargs):
                 if self.serial.is_open is False:
@@ -220,12 +214,12 @@ class VXM:
             ready = self.send_command("V")
             
             if ready and ready== "R":
-                logging.info(f"VXM:SET_MODEL:VXM at {self.serial}:Motor {self.id} model set: {model}")
+                self.log(logging.INFO, f"VXM:SET_MODEL:VXM at {self.serial}:Motor {self.id} model set: {model}")
                 self.clear()
                 return 0
             else:
                 self.clear()
-                logging.error(f"VXM:SET_MODEL:ERROR:VXM at {self.serial}:ìUnable to set motor {self.id} model")
+                self.log(logging.ERROR, f"VXM:SET_MODEL:ERROR:VXM at {self.serial}:ìUnable to set motor {self.id} model")
                 return -1
           
         def set_acc(self, value):
@@ -234,11 +228,11 @@ class VXM:
             ready = self.send_command("V")
 
             if ready and ready== "R":
-                logging.info(f"VXM:SET_ACC:VXM at {self.serial}:Motor {self.id} acceleration set: {value}")
+                self.log(logging.INFO, f"VXM:SET_ACC:VXM at {self.serial}:Motor {self.id} acceleration set: {value}")
                 self.clear()
                 return 0
             else:
-                logging.error(f"VXM:SET_ACC:ERROR:VXM at {self.serial}:Unable to set motor {self.id} acceleration")
+                self.log(logging.ERROR, f"VXM:SET_ACC:ERROR:VXM at {self.serial}:Unable to set motor {self.id} acceleration")
                 self.clear()
                 return -1
 
@@ -248,10 +242,10 @@ class VXM:
             
             try:
                 self.send_command(command_str)
-                logging.info(f"VXM:SET_SPEED:VXM: motor {self.id} speed set to {value}")
+                self.log(logging.INFO, f"VXM:SET_SPEED:VXM: motor {self.id} speed set to {value}")
                 return 0 
             except Exception as e:
-                logging.error(f"VXM:SET_SPEED:ERROR:VXM: unable to set speed {self.id} to {value}:{e}")
+                self.log(logging.ERROR, f"VXM:SET_SPEED:ERROR:VXM: unable to set speed {self.id} to {value}:{e}")
                 return -2
     
         def wait(self,dtime):
@@ -261,12 +255,12 @@ class VXM:
             try:
                 self.send_command(command_str)
                 self.run()
-                logging.info(f"VXM:WAIT:done waiting, ready for next step...")
+                self.log(logging.INFO, f"VXM:WAIT:done waiting, ready for next step...")
                 self.clear()
                 return 0
                 
             except Exception as e:
-                logging.error(f"VXM:SET_SPEED:ERROR:VXM at {self.serial}:Unable to set waiting:{e}")
+                self.log(logging.ERROR, f"VXM:SET_SPEED:ERROR:VXM at {self.serial}:Unable to set waiting:{e}")
                 self.clear()
                 return -2
 
@@ -293,10 +287,10 @@ class VXM:
             command_str = f"I{self.id}M{pos}"
             try:
                 self.send_command(command_str)
-                logging.info(f"VXM:MOVE_FWD:VXM at {self.serial}: motor {self.id} in position {pos}")
+                self.log(logging.INFO, f"VXM:MOVE_FWD:VXM at {self.serial}: motor {self.id} in position {pos}")
                 return 0 
             except Exception as e:
-                logging.error(f"VXM:MOVE_FWD:ERROR:VXM at {self.serial}:unable to move motor {self.id} in position {pos}:{e}")
+                self.log(logging.ERROR, f"VXM:MOVE_FWD:ERROR:VXM at {self.serial}:unable to move motor {self.id} in position {pos}:{e}")
                 return -1
             
         def move_BWD(self, pos):
@@ -304,10 +298,10 @@ class VXM:
             command_str = f"I{self.id}M-{pos}"
             try:
                 self.send_command(command_str)
-                logging.info(f"VXM:MOVE_BWD:VXM at {self.serial}: motor {self.id} in position {pos}")
+                self.log(logging.INFO,f"VXM:MOVE_BWD:VXM at {self.serial}: motor {self.id} in position {pos}")
                 return 0 
             except Exception as e:
-                logging.error(f"VXM:MOVE_BWD:ERROR:VXM at {self.serial}:unable to move motor {self.id} in position {pos}:{e}")
+                self.log(logging.ERROR, f"VXM:MOVE_BWD:ERROR:VXM at {self.serial}:unable to move motor {self.id} in position {pos}:{e}")
                 return -2
                
         def move_Neg0(self):
@@ -315,10 +309,10 @@ class VXM:
             command_str = f"I{self.id}M-0"
             try:
                 self.send_command(command_str)
-                logging.info(f"VXM:MOVE_NEG0:VXM: motor {self.id} in negative zero position")
+                self.log(logging.INFO, f"VXM:MOVE_NEG0:VXM: motor {self.id} in negative zero position")
                 return 0 
             except Exception as e:
-                logging.error(f"VXM:MOVE_NEG0:ERROR:VXM: unable to move motor {self.id} in negative zero position:{e}")
+                self.log(logging.ERROR, f"VXM:MOVE_NEG0:ERROR:VXM: unable to move motor {self.id} in negative zero position:{e}")
                 return -2
             
         def move_Pos0(self):
@@ -326,11 +320,10 @@ class VXM:
             command_str = f"I{self.id}M0"
             try:
                 self.send_command(command_str)
-                logging.info(f"VXM:MOVE_POS0:VXM: motor {self.id} in positive zero position")
+                self.log(logging.INFO, f"VXM:MOVE_POS0:VXM: motor {self.id} in positive zero position")
                 return 0 
-              
             except Exception as e:
-                logging.error(f"VXM:MOVE_POS0:ERROR:VXM: unable to move motor {self.id} in positive zero position:{e}")
+                self.log(logging.ERROR, f"VXM:MOVE_POS0:ERROR:VXM: unable to move motor {self.id} in positive zero position:{e}")
                 return -2
             
         def move_ABS0(self):
@@ -338,10 +331,10 @@ class VXM:
             command_str = f"IA{self.id}M0"
             try:
                 self.send_command(command_str)
-                logging.info(f"VXM:MOVE_ABS0:VXM: motor {self.id} in absolute 0 position")
+                self.log(logging.INFO, f"VXM:MOVE_ABS0:VXM: motor {self.id} in absolute 0 position")
                 return 0 
             except Exception as e:
-                logging.error(f"VXM:MOVE_ABS0:ERROR:VXM: unable to move motor {self.id} in absolute 0 position:{e}")
+                self.log(logging.ERROR, f"VXM:MOVE_ABS0:ERROR:VXM: unable to move motor {self.id} in absolute 0 position:{e}")
                 return -1
                   
         def move_ABS(self, abs_pos):
@@ -351,18 +344,18 @@ class VXM:
 
             try:
                 self.send_command(command_str)
-                logging.info(f"VXM:MOVE_ABS:VXM: motor {self.id} in absolute position {abs_pos}")
+                self.log(logging.INFO, f"VXM:MOVE_ABS:VXM: motor {self.id} in absolute position {abs_pos}")
                 return 0 
             except Exception as e:
-                logging.error(f"VXM:MOVE_ABS:ERROR:VXM: unable to move motor {self.id} in absolute position {abs_pos}:{e}")
+                self.log(logging.ERROR, f"VXM:MOVE_ABS:ERROR:VXM: unable to move motor {self.id} in absolute position {abs_pos}:{e}")
                 return -2
 
         def set_ABSzero(self):
             self.flush_buffers()
             try:
                 self.send_command(f"IA{self.id}M-0")                
-                logging.info(f"VXM:MOVE_ABS:VXM: motor {self.id} in absolute position 0")
+                self.log(logging.INFO, f"VXM:MOVE_ABS:VXM: motor {self.id} in absolute position 0")
                 return 0 
             except Exception as e:
-                logging.error(f"VXM:MOVE_ABS:ERROR:VXM: unable to move motor {self.id} in absolute position 0:{e}")
+                self.log(logging.ERROR, f"VXM:MOVE_ABS:ERROR:VXM: unable to move motor {self.id} in absolute position 0:{e}")
                 return -1
