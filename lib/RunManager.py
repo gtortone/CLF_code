@@ -127,13 +127,13 @@ class RunManager:
         else:
             self.log(logging.ERROR, f"{self.runentry.runtype.name} run cannot start due to other job running")
 
-    #def stop(self):
-    #    if self.job_is_running():
-    #        self.job.terminate()
-    #        self.job = multiprocessing.Process(target=self.run.abort)
-    #        self.job.start()
-    #        return 0
-    #    return -1
+    def stop(self):
+        if self.job_is_running():
+            self.job.terminate()
+            self.job = multiprocessing.Process(target=self.run.abort)
+            self.job.start()
+            return 0
+        return -1
 
     def kill(self):
         if self.job_is_running():
