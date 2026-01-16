@@ -3,3 +3,4 @@ __pycache__
 spikes/*.csv
 logs/*.csv*
 logs/*.log*
+conf/parameters.yml
