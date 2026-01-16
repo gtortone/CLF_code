@@ -8,14 +8,14 @@ RADIOMETER_WAIT = 2
 
 class Radiometer:
 
-    def __init__(self, port, model, baudrate=9600, bytesize=8, parity='N', stopbits=1, timeout=1):
+    model: str = "unknown"
+
+    def __init__(self, port, baudrate=9600, bytesize=8, parity='N', stopbits=1, timeout=1):
         self.port = None
         self.serial = None
-        self.model = str.upper(model)
         self.ready = False
         self.params = locals()
         self.params.pop('port')
-        self.params.pop('model')
         self.params.pop('self')
 
         try:
@@ -86,11 +86,7 @@ class Radiometer:
 
 class Radiometer3700(Radiometer):
 
-    def __init__(self, port, baudrate=9600, bytesize=8, parity='N', stopbits=1, timeout=1):
-        self.params = locals()
-        self.params.pop('self')
-        self.params.pop('__class__')
-        super().__init__(model='3700', **self.params)
+    model = "3700"
 
     def info(self):
         #self.flush_buffers()
@@ -168,11 +164,7 @@ class Radiometer3700(Radiometer):
 
 class RadiometerOphir(Radiometer):
 
-    def __init__(self, port, baudrate=9600, bytesize=8, parity='N', stopbits=1, timeout=1):
-        self.params = locals()
-        self.params.pop('self')
-        self.params.pop('__class__')
-        super().__init__(model="OPHIR", **self.params)
+    model = "OPHIR"
 
     @Radiometer.check_open
     def get(self, label):
@@ -225,6 +217,7 @@ class RadiometerOphir(Radiometer):
         try:
             self.flush_buffers()
             self.set("$DU", 1)
+            self.set("$CS", "1 0 1")
         except Exception as e:
             #print(f"RADM_MON_{self.model}:SET_UP:ERROR:Some problem occurred: {e}")
             self.log(logging.ERROR, f"RADM_MON_{self.model}:SET_UP:ERROR:Some problem occurred: {e}")
