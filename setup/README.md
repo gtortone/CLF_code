@@ -33,6 +33,28 @@ apt update && apt full-upgrade
 Se `apt` reinstalla il pacchetto del kernel, `uname -r` e `/lib/modules/` possono non coincidere
 fino al reboot (nessun modulo caricabile, nemmeno `pps-gpio`): riavviare prima di provare il PPS.
 
+### 0.0 Niente sospensione
+
+L'immagine Radxa con desktop sospende il PC dopo 20 minuti di inattività: lo fa `gsd-power` della
+schermata di login GDM ("The system will suspend now!" nel journal). Il PC sparisce dalla rete e
+main.py si ferma. Va disattivata su ogni Rock:
+
+```bash
+systemctl mask sleep.target suspend.target hibernate.target hybrid-sleep.target suspend-then-hibernate.target
+mkdir -p /etc/systemd/sleep.conf.d /etc/systemd/logind.conf.d
+printf '[Sleep]\nAllowSuspend=no\nAllowHibernation=no\nAllowSuspendThenHibernate=no\nAllowHybridSleep=no\n' \
+    > /etc/systemd/sleep.conf.d/90-clf-nosleep.conf
+printf '[Login]\nIdleAction=ignore\nHandleSuspendKey=ignore\nHandleHibernateKey=ignore\nHandleLidSwitch=ignore\n' \
+    > /etc/systemd/logind.conf.d/90-clf-nosleep.conf
+# GDM (solo se installato): niente sospensione per inattività nella schermata di login
+mkdir -p /etc/dconf/profile /etc/dconf/db/gdm.d
+[ -f /etc/dconf/profile/gdm ] || printf 'user-db:user\nsystem-db:gdm\nfile-db:/usr/share/gdm/greeter-dconf-defaults\n' > /etc/dconf/profile/gdm
+printf "[org/gnome/settings-daemon/plugins/power]\nsleep-inactive-ac-type='nothing'\nsleep-inactive-ac-timeout=0\n" \
+    > /etc/dconf/db/gdm.d/90-clf-nosleep
+dconf update
+systemctl suspend                                # deve rispondere: Sleep verb "suspend" not supported
+```
+
 ### 0.1 Porte USB
 
 | Device | Chip | Uso |
@@ -64,8 +86,18 @@ cat /sys/class/pps/pps0/name                     # pps@0.-1  (pps1 "usbserial...
 ppstest /dev/pps0                                # una riga "assert" al secondo, con la FPGA programmata
 ```
 
-Immagine Radxa: `dtc -@ -I dts -O dtb -o /boot/dtbo/pps.dtbo setup/pps-gpio.dts` e
-`fdtoverlays /boot/dtbo/pps.dtbo` in `/boot/extlinux/extlinux.conf`.
+Immagine Radxa (Debian 12, kernel 6.1.43-rk2312, provato il 2026-11-20):
+
+```bash
+apt install device-tree-compiler
+dtc -@ -I dts -O dtb -o /boot/dtbo/pps.dtbo setup/pps-gpio.dts
+u-boot-update                                    # aggiunge "fdtoverlays /boot/dtbo/pps.dtbo" a extlinux.conf
+reboot
+```
+
+Il PPS che arriva al PC è quello **locale** della FPGA: dopo una nuova programmazione è fuori fase
+rispetto al GPS (millisecondi) finché main.py non lo allinea all'avvio (`local PPS aligned with GPS`).
+Prima di allora chrony non va considerato sincronizzato.
 
 ### 0.3 Firmware della FPGA nella flash
 
@@ -97,6 +129,10 @@ cd moxa && ./mxinst                              # avviso sul kernel: invio; "se
 cd /usr/lib/npreal2/driver
 ./mxaddsvr <IP del MOXA> 16                      # crea ttyr00..ttyr0f, porte dati 950.., comandi 966..
 ```
+
+Immagine Radxa (kernel 6.1 Rockchip): gli header ci sono già (`linux-headers-$(uname -r)`), ma il
+kernel compila i moduli con `-Werror` e la v6.2 si ferma su un warning (`discards 'const' qualifier`
+in `npreal_set_termios`): installare con `KCFLAGS=-Wno-error ./mxinst` (provato il 2026-11-20).
 
 `mxinst` installa e abilita `npreal2.service`. `mxaddsvr` scrive solo la configurazione
 (`npreal2d.cf`): si può fare anche senza il MOXA collegato. Per cambiare IP:
