@@ -50,6 +50,9 @@ class FPGADevice:
         self.regmap["mux_bnc_4"] = FPGARegister(0x21)
         self.regmap["shots_num"] = FPGARegister(0x22, 2)
         self.regmap["shots_cnt"] = FPGARegister(0x24, 2)
+        self.regmap["lock_lost"] = FPGARegister(0x27)       # hw v2: sticky lock-lost bits, any write clears them
+        self.regmap["fw_build"] = FPGARegister(0xFC, 2)     # bitstream build time (USR_ACCESS), 0 if absent
+        self.regmap["fw_version"] = FPGARegister(0xFF)      # 0 on firmware without the register
 
         self.iomap = {}
         self.iomap["laser_start"] = FPGAIO(0x3, 0)
@@ -66,34 +69,58 @@ class FPGADevice:
         self.iomap["flipper_raman"] = FPGAIO(0x17, 2)
         self.iomap["flipper_atten"] = FPGAIO(0x17, 3)
 
-        self.iomap["pps_ok"] = FPGAIO(0x7, 2)
+        self.iomap["pps_ok"] = FPGAIO(0x7, 8)       # PPS_PRESENT (bit 2 is Freq_Back_OK, not driven)
+        self.iomap["pps_present"] = FPGAIO(0x7, 8)
         self.iomap["jc_lock"] = FPGAIO(0x8, 2)
         self.iomap["vcxo_lock"] = FPGAIO(0x8, 3)
         self.iomap["force_align"] = FPGAIO(0x9, 4)
+        self.iomap["pll30_lock"] = FPGAIO(0x8, 4)     # hw v2: clk_wiz 30.72 -> 122.88 MHz locked
+        self.iomap["gps_run"] = FPGAIO(0x26, 0)       # hw v2: GPS_RESET pin (active low), 0 = GPS in reset
+        self.iomap["pll30_lost"] = FPGAIO(0x27, 0)    # hw v2: clk_wiz_0 lost lock since last clear (write 0x27)
+        self.iomap["jc_lost"] = FPGAIO(0x27, 1)       # hw v2: 2nd lock bit (jitter cleaner, removed in the single-MMCM firmware: = bit 0)
 
     def close(self):
         self.serial.close()
 
+    def apply_dio_map(self, overrides):
+        """Site wiring of the DB25 digital I/O: {name: [register, bit, inverted]}."""
+        for name, (regaddr, bit, inverted) in overrides.items():
+            if name not in self.iomap:
+                raise NameError(f"dio.yml: unknown FPGA I/O '{name}'")
+            self.iomap[name] = FPGAIO(int(regaddr), int(bit), inverted=bool(inverted))
+
+    # one register access takes well under a second: a lock held longer means the holder is stuck
+    LOCK_TIMEOUT_S = 10
+    READ_RETRIES = 3
+
     def critical_section(func):
         def wrapper(self, *args, **kwargs):
-            self.mutex.acquire()
-            ret = func(self, *args, **kwargs)
-            self.mutex.release()
-            return ret
+            mutex = self.mutex          # local: RunManager may replace a lock left held by a dead process
+            if not mutex.acquire(timeout=self.LOCK_TIMEOUT_S):
+                raise TimeoutError(f"FPGA serial lock not released within {self.LOCK_TIMEOUT_S}s")
+            try:
+                return func(self, *args, **kwargs)
+            finally:
+                mutex.release()         # also on exceptions
         return wrapper
 
     @critical_section
     def read_address(self, addr):
-        value = 0
-        while True:
+        """Register value; IOError after READ_RETRIES missing/malformed answers.
+
+        (It used to return 0 silently, and write_dio() then wrote that 0 back, clearing
+        the other bits of the register.)"""
+        for _ in range(self.READ_RETRIES):
+            self.serial.reset_input_buffer()            # drop a late answer to an earlier request
             self.serial.write(f"{str(hex(addr))[2:]}\n".encode())
+            answer = self.serial.read_until('\r'.encode())
+            if not answer.endswith(b'\r'):
+                continue                                # timeout: never parse a partial answer
             try:
-                value = int(self.serial.read_until('\r'.encode()).decode()[:-1], 16)
-            except:
+                return int(answer[:-1].decode(errors='replace').strip(), 16)
+            except ValueError:
                 continue
-            finally:
-                break
-        return value
+        raise IOError(f"FPGA: no valid answer reading address {hex(addr)} ({self.READ_RETRIES} attempts)")
 
     @critical_section
     def write_address(self, addr, value):
@@ -106,6 +133,11 @@ class FPGADevice:
             raise NameError
         addr = self.regmap[name].get_addr()
         width = self.regmap[name].get_width()
+        if name == "time_cnt":
+            # 0x0D = Time_Tag[15:0] (reading it latches 0x0E), 0x0E = Time_Tag[26:11], not [31:16]
+            lo = self.read_address(addr)
+            hi = self.read_address(addr + 1)
+            return (hi << 11) | (lo & 0x7FF)
         i = value = 0
         while i < width:
             value = value | (self.read_address(addr+i) << (i * 16))

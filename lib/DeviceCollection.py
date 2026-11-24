@@ -8,6 +8,8 @@ from lib.Radiometer import Radiometer3700, RadiometerOphir
 from lib.Centurion import Centurion
 from lib.FPGADevice import FPGADevice
 from lib.FPGAData import FPGAData
+from lib.Hardware import get_profile, check_firmware, firmware_build
+import logging
 
 class DeviceCollection:
     def __init__(self):
@@ -20,6 +22,16 @@ class DeviceCollection:
         self.data = FPGAData("/dev/data0")
 
     def init(self, cfg):
+        # hardware profile: clock for the timestamp conversion, firmware version check
+        self.hw = get_profile(cfg.parameters)
+        self.data.tick_ns = self.hw.tick_ns
+        self.fpga.apply_dio_map(getattr(cfg, 'dio', {}))      # site wiring (conf/<site>/dio.yml)
+        fw = check_firmware(self.fpga, self.hw)
+        build = firmware_build(self.fpga)
+        logging.getLogger("run").info(
+            f"FPGA firmware hw v{fw if fw else '?'} (profile v{self.hw.version}), "
+            f"build {build.isoformat(' ') if build else 'unknown'}", extra={'classname': 'DeviceCollection'})
+
         # outlets
         for oname, oparams in cfg.outlets.items():
             port_params = cfg.get_port_params(oparams['port'])

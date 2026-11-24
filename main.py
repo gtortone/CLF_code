@@ -3,7 +3,8 @@
 import sys
 import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
-import threading 
+import threading
+import logging
 import cmd2
 import time
 from datetime import datetime, timedelta
@@ -13,7 +14,9 @@ from lib.HouseKeeping import HouseKeeping
 from lib.RunManager import RunManager
 from lib.RunCalendar import RunEntry
 from lib.Logger import Logger
-from lib.Run import RunType
+from lib.Run import RunType, RunBase
+from lib.GpsTime import unix_to_gps
+from lib import TimeSync
 
 class App(cmd2.Cmd):
 
@@ -28,7 +31,10 @@ class App(cmd2.Cmd):
         self.dc = DeviceCollection()
         self.dc.init(self.cfg)
 
-        #Logger.init()
+        Logger.init()
+
+        # FPGA seconds counter used in the shot timestamps: verify / align it before any run
+        self.fpga_time_ensure()
 
         self.hk = HouseKeeping(self.cfg.parameters)
         self.thr_hk = threading.Thread(target=self.hk.run)
@@ -47,6 +53,39 @@ class App(cmd2.Cmd):
     # catch CTRL-C to avoid issues with running threads/processes
     def sigint_handler(self, signum, sigframe):
         pass
+
+    def fpga_time_ensure(self):
+        logger = logging.getLogger("run")
+
+        def log(level, msg):
+            print(f"{level.upper()}: {msg}")
+            logger.log(getattr(logging, level.upper()), msg, extra={'classname': 'App'})
+        # local PPS first: a force align also increments the seconds counter
+        pps_ok = TimeSync.ensure_pps(self.dc.fpga, self.dc.hw.tick_ns, log)
+        return TimeSync.ensure(self.dc.fpga, log) and pps_ok
+
+    ## fpga_time ##
+
+    fpga_time_parser = cmd2.Cmd2ArgumentParser()
+    fpga_time_parser.add_argument('action', choices=['check', 'align'])
+
+    @cmd2.with_category('System Control')
+    @cmd2.with_argparser(fpga_time_parser)
+    def do_fpga_time(self, args):
+        """check / align the FPGA time: local PPS to the GPS PPS, seconds counter to the host clock"""
+        if args.action == 'check':
+            off = TimeSync.offset(self.dc.fpga)
+            fpga_unix = int(time.time()) + off
+            print(f"FPGA {fpga_unix} (GPS {unix_to_gps(fpga_unix)}), offset from host {off} s")
+            print(f"local PPS - GPS PPS: {-TimeSync.pps_error_ns(self.dc.fpga, self.dc.hw.tick_ns):+.0f} ns")
+            return
+        if self.mode == 'auto':
+            print("E: set mode to manual")
+            return
+        if self.rm.job_is_running():
+            print("E: run in progress")
+            return
+        self.fpga_time_ensure()
 
     ## mode ##
 
@@ -291,7 +330,7 @@ class App(cmd2.Cmd):
         while self.dc.fpga.read_dio('cover_raman_open') == self.dc.fpga.read_dio('cover_raman_closed'):
             if t >= cover_timeout_s:
                 print(f"cover open timeout ({cover_timeout_s}) error")
-                #return -1
+                return
             time.sleep(1)
             t += 1
     
@@ -307,6 +346,7 @@ class App(cmd2.Cmd):
         while self.dc.fpga.read_dio('cover_raman_open') == True:
             if t >= cover_timeout_s:
                 print(f"cover close timeout ({cover_timeout_s}) error")
+                return
             time.sleep(1)
             t += 1
     
@@ -359,13 +399,14 @@ class App(cmd2.Cmd):
         if self.mode == 'auto':
             print("E: set mode to manual")
             return
-        self.dc.laser.fire()
-    
+        if self.dc.laser.fire() != 0:
+            print("E: laser not in fire mode (temperature readout failed or out of range, see device.log)")
+
     def laserenergy(self, args):
         if self.mode == 'auto':
             print("E: set mode to manual")
             return
-        self.dc.laser.set_pwdth(args.value)
+        self.dc.laser.set_pwdth(args.num)
     
     def lasertemps(self, args):
         if self.mode == 'auto':
@@ -493,13 +534,13 @@ class App(cmd2.Cmd):
         if frequency < 1 or frequency > 100:
             print("E: frequency must be between 1 and 100 Hz")
             return
-        period = int(100_000_000 / frequency)
+        hw = self.dc.hw
         self.dc.fpga.write_register('pps_delay', 0)
         self.dc.fpga.write_bit('laser_en', 1)
         self.dc.fpga.write_bit('timestamp_en', 0)
-        self.dc.fpga.write_register('pulse_width', 10_000)  # 100 us
-        self.dc.fpga.write_register('pulse_energy', 17_400) # 140 us = 174 us, maximum
-        self.dc.fpga.write_register('pulse_period', period) # 10 ms
+        self.dc.fpga.write_register('pulse_width', hw.ticks(RunBase.PULSE_WIDTH_S))
+        self.dc.fpga.write_register('pulse_energy', hw.ticks(RunBase.PULSE_ENERGY_S))
+        self.dc.fpga.write_register('pulse_period', hw.period(1.0 / frequency))
         self.dc.fpga.write_register('shots_num', n_shots)
         print(f"Firing {n_shots} shots at {frequency} Hz ...")
         self.dc.fpga.write_dio('laser_start', 1)

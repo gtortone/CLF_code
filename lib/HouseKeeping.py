@@ -15,10 +15,15 @@ from lib.TLA2518 import TLA2518
 from lib.LTC2983 import LTC2983
 from lib.LTC2983_const import *
 from lib.FPGADevice import FPGADevice
+from lib.GpsInfo import GpsStatus, FIELDS as GPS_FIELDS
+from lib.Hardware import get_profile
 
 class HouseKeeping:
 
     __subscribers = []
+
+    MAX_FAILURES = 3        # consecutive failed cycles (10 s each) before the fail-safe alarm
+    GPS_RETRY_S = 5
 
     def __init__(self, params):
         self.spi1 = SpiController()
@@ -33,11 +38,22 @@ class HouseKeeping:
         self.tla = TLA2518()
         self.adc = self.tla.get_ftdi_backend(self.slave2)
 
-        self.gpsd = gps.gps(mode=gps.WATCH_ENABLE | gps.WATCH_NEWSTYLE)
+        # WATCH_PPS: PPS reports (host clock at the PPS edge) when gpsd has a PPS source
+        self.gpsd = gps.gps(mode=gps.WATCH_ENABLE | gps.WATCH_NEWSTYLE | getattr(gps, 'WATCH_PPS', 0))
+        # raw=1: also the binary packets of the receiver, as hex dumps (UBX messages for GpsInfo)
+        try:
+            self.gpsd.send('?WATCH={"enable":true,"json":true,"pps":true,"raw":1}')
+        except Exception as e:
+            logging.getLogger("housekeeping").warning(f"gpsd raw watch not enabled: {e!r}")
         self.gps_thr = None
+        self.gps_status = GpsStatus()
+        self.gps_warned = {}            # warning key -> time of the last log
 
         self.params = params
         self.identity = str.lower(self.params['identity'])
+        hw = get_profile(self.params)
+        self.tick_ns = hw.tick_ns           # FPGA clock period for gps_ns_error
+        self.hw_version = hw.version        # 0x27 lock-lost register only on hw v2
 
         self.log = logging.getLogger("housekeeping")
         self.log.setLevel(logging.INFO)
@@ -85,10 +101,43 @@ class HouseKeeping:
         self.alarm_data = []
 
     def collect_gps(self):
+        failing = False
         while self.running:
-            self.gpsd.next()
+            try:
+                report = self.gpsd.next()
+                # a non-JSON line (raw=1 hex dump, NMEA): next() returns the previous JSON
+                # report again, which must not be stored as new
+                line = getattr(self.gpsd, 'response', None)
+                if isinstance(line, str) and not line.lstrip().startswith('{'):
+                    self.gps_status.update_raw(line, time.time())
+                else:
+                    self.gps_status.update(report, time.time())
+                if failing:
+                    self.log.info("gpsd readout recovered")
+                    failing = False
+            except Exception as e:
+                # e.g. gpsd restarted: keep the thread alive, log once, retry
+                if not failing:
+                    self.log.error(f"gpsd readout failed, retrying every {self.GPS_RETRY_S}s: {e!r}")
+                    failing = True
+                for _ in range(self.GPS_RETRY_S):
+                    if not self.running:
+                        return
+                    time.sleep(1)
+
+    GPS_WARNING_PERIOD_S = 3600
+
+    def check_gps_warnings(self):
+        """Log (at most once per GPS_WARNING_PERIOD_S each) conditions that make the shot
+        timestamps unreliable: host clock off from GPS, leap second table out of date."""
+        now = time.time()
+        for key, msg in self.gps_status.warnings(now).items():
+            if now - self.gps_warned.get(key, 0) >= self.GPS_WARNING_PERIOD_S:
+                self.log.warning(msg)
+                self.gps_warned[key] = now
 
     def collect_data(self):
+        gps_values = None
         for d in self.data:
             if d['dev'] == 'tla':
                 if d['name'] == 'rain':
@@ -106,8 +155,51 @@ class HouseKeeping:
                     d['value'] = self.fpga.read_dio(d['name'])
             elif d['dev'] == 'gps':
                 if d['name'] == 'gps_fix':
-                    d['value'] = self.gpsd.fix.mode > 1
-                    d['info'] = self.gps_fix_str[self.gpsd.fix.mode]
+                    # usable time reference = gpsd has a fix AND the FPGA sees the PPS
+                    mode = self.gpsd.fix.mode
+                    pps = self.fpga.read_dio('pps_present')
+                    d['value'] = mode > 1 and pps
+                    d['info'] = f"{self.gps_fix_str[mode]}, PPS {'present' if pps else 'missing'}"
+                elif d['name'] == 'gps_ns_error':
+                    # GPS PPS - local PPS measured by the FPGA (same zero as the shot log)
+                    d['value'] = (self.fpga.read_register('pps_distance') - 32767) * getattr(self, 'tick_ns', 10.0)
+                elif d['name'] in GPS_FIELDS:
+                    if gps_values is None:
+                        gps_values = self.gps_status.values(time.time())
+                    d['value'] = round(gps_values[d['name']], 7)
+            elif d['dev'] == 'fpga':
+                if d['name'] == 'fpga_lock_lost':
+                    d['value'] = self.check_lock_lost()
+
+    LOCK_WARNING_PERIOD_S = 600
+
+    def check_lock_lost(self):
+        """Register 0x27 (hw v2): 1 if the clock MMCM lost lock since the previous cycle.
+
+        The bit is sticky (set at power-up too) and any write to 0x27 clears it: read,
+        then clear when set. The first read after start only clears the power-up value.
+        A loss is logged as WARNING, then at most once per LOCK_WARNING_PERIOD_S with the
+        number of cycles with a loss in between. NaN on hw v1 (no register)."""
+        if getattr(self, 'hw_version', 1) < 2:
+            return float('nan')
+        lost = self.fpga.read_register('lock_lost') & 1
+        if lost:
+            self.fpga.write_register('lock_lost', 0)
+        if not getattr(self, 'lock_checked', False):
+            self.lock_checked = True
+            self.lock_lost_count = 0
+            self.lock_warned = 0.0
+            self.log.info(f"FPGA clock lock-lost flag {'cleared (set since power-up or last clear)' if lost else 'not set'}")
+            return 0
+        if lost:
+            self.lock_lost_count += 1
+            now = time.time()
+            if now - self.lock_warned >= self.LOCK_WARNING_PERIOD_S:
+                self.log.warning(f"FPGA clock MMCM lost lock (122.88 MHz clock unstable: shot timestamps "
+                                 f"may be wrong; {self.lock_lost_count} cycle(s) with a loss since the last warning)")
+                self.lock_warned = now
+                self.lock_lost_count = 0
+        return int(lost)
 
     def log_data(self):
         s = ''
@@ -119,28 +211,53 @@ class HouseKeeping:
         self.csv.info(csv_row)
 
     def check_alarm(self):
-        self.alarm_data = []
+        # build the list locally and publish it in one assignment: get_alarm() is called
+        # from the RunManager thread and must never see a half-built (empty) list
+        alarm_data = []
         for d in self.data:
             if d.get('alarm', None) is not None:
                 if d['dev'] == 'tla':
-                    if (d['value'] < d['min']) or (d['value'] > d['max']):
+                    if d['name'] == 'rain':
+                        # analog rain sensor (XLF): value is already the boolean from collect_data()
+                        d['alarm'] = bool(d['value'])
+                        if d['alarm']:
+                            alarm_data.append(d)
+                    elif (d['value'] < d['min']) or (d['value'] > d['max']):
                         d['alarm'] = True
-                        self.alarm_data.append(d)
+                        alarm_data.append(d)
                     else:
                         d['alarm'] = False
                 elif d['dev'] == 'dio':
                     if d['name'] == 'rain':
                         if d['value'] or d['error']:
                             d['alarm'] = True
-                            self.alarm_data.append(d)
+                            alarm_data.append(d)
                         else:
                             d['alarm'] = False
                 elif d['dev'] == 'gps':
                     if d['name'] == 'gps_fix':
-                        d['alarm'] = self.gpsd.fix.mode <= 1
+                        # without time reference FD/tank shots would be at the wrong time
+                        d['alarm'] = not d['value']
+                        if d['alarm']:
+                            alarm_data.append(d)
+                    elif 'min' in d or 'max' in d:
+                        # e.g. gps_ns_error, gps_fix_age: limits in sensors.yml; a value that
+                        # cannot be measured (NaN) is an alarm too
+                        v = d['value']
+                        d['alarm'] = (v is None or v != v
+                                      or v < d.get('min', float('-inf')) or v > d.get('max', float('inf')))
+                        if d['alarm']:
+                            alarm_data.append(d)
 
-        if len(self.alarm_data):
-            self.notify_subscribers(self.alarm_data)
+                elif d['dev'] == 'fpga':
+                    # fpga_lock_lost with 'alarm' in sensors.yml: blocking alarm for the cycle
+                    d['alarm'] = d['value'] == 1
+                    if d['alarm']:
+                        alarm_data.append(d)
+
+        self.alarm_data = alarm_data
+        if len(alarm_data):
+            self.notify_subscribers(alarm_data)
 
     def get_alarm(self):
         return self.alarm_data
@@ -149,10 +266,25 @@ class HouseKeeping:
         self.running = True
         self.gps_thr = threading.Thread(target=self.collect_gps)
         self.gps_thr.start()
+        failures = 0
         while True:
-            self.collect_data()
-            self.log_data()
-            self.check_alarm()
+            try:
+                self.collect_data()
+                self.log_data()
+                self.check_alarm()
+                self.check_gps_warnings()
+                if failures >= self.MAX_FAILURES:
+                    self.log.info("housekeeping readout recovered")
+                failures = 0
+            except Exception as e:
+                failures += 1
+                self.log.error(f"housekeeping cycle failed ({failures} in a row): {e!r}", exc_info=True)
+                if failures >= self.MAX_FAILURES:
+                    # sensors (rain included) cannot be trusted any more: fail safe,
+                    # block new runs and abort the one in progress
+                    self.alarm_data = [{'dev': 'hk', 'name': 'housekeeping_error',
+                                        'value': repr(e), 'alarm': True}]
+                    self.notify_subscribers(self.alarm_data)
             for _ in range(10):
                 if self.running == False:
                     return
@@ -172,8 +304,12 @@ class HouseKeeping:
             pass
 
     def notify_subscribers(self, alarm_data):
-        for sub in self.__subscribers:
-            sub(alarm_data)
+        for sub in list(self.__subscribers):
+            try:
+                sub(alarm_data)
+            except Exception as e:
+                # a failing subscriber must not stop the housekeeping loop
+                self.log.error(f"alarm subscriber {sub} failed: {e!r}", exc_info=True)
 
 if __name__ == "__main__":
     hk = HouseKeeping()

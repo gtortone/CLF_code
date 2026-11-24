@@ -56,27 +56,74 @@ class RunManager:
         self.run = None
         self.job = None
         self.scheduler_running = True
-        self.thr = threading.Thread(target=self.scheduler)
-        self.thr.start()
         self.loop = True
         self.abort_in_progress = False
 
         self.hk.subscribe(self.alarm_handler)
 
+        # start the thread only when every attribute it uses exists
+        self.thr = threading.Thread(target=self.scheduler)
+        self.thr.start()
+
     def scheduler(self):
         self.log(logging.INFO, "start scheduler loop")
         nr = self.next_run()
+        if nr is None:
+            self.log(logging.WARN, "no scheduled runs left in the calendar")
         while self.loop:
-            if datetime.datetime.now() > nr.start_time:
-                if self.scheduler_running:
-                    # start scheduled run 
-                    self.submit(nr, source='runmanager')
-                else:
-                    # warn user about scheduler disabled
-                    self.log(logging.WARN, f"run {nr.runtype.name} expected at {nr.start_time} not started due to scheduler disabled (check 'mode' in CLF cli)")
-                self.runlist.remove(nr)
+            try:
+                if nr is not None and datetime.datetime.now() > nr.start_time:
+                    if self.scheduler_running:
+                        # start scheduled run
+                        self.submit(nr, source='runmanager')
+                    else:
+                        # warn user about scheduler disabled
+                        self.log(logging.WARN, f"run {nr.runtype.name} expected at {nr.start_time} not started due to scheduler disabled (check 'mode' in CLF cli)")
+                    self.runlist.remove(nr)
+                    nr = self.next_run()
+                    if nr is None:
+                        self.log(logging.WARN, "no scheduled runs left in the calendar")
+            except Exception as e:
+                # never let the scheduler thread die: drop the entry that failed and go on
+                self.log(logging.ERROR, f"scheduler error on {nr}: {e!r}", exc_info=True)
+                if nr in self.runlist:
+                    self.runlist.remove(nr)
                 nr = self.next_run()
+            try:
+                self.idle_check(nr)
+            except Exception as e:
+                self.log(logging.ERROR, f"idle shutdown check failed: {e!r}", exc_info=True)
             time.sleep(1)
+
+    # no run within this time and instruments still powered (inverter on): shut down.
+    # Longer than the gaps of a night (FD every 15 min, Raman end+30, calib end+60).
+    IDLE_SHUTDOWN_S = 45 * 60
+    IDLE_CHECK_PERIOD_S = 60
+
+    def idle_check(self, nr):
+        """Auto mode only: shut the station down when nothing is running, the inverter is
+        on and the next run is more than IDLE_SHUTDOWN_S away (or there is none), e.g.
+        when the last run of the night did not start (alarm, manual mode, busy)."""
+        now = time.monotonic()
+        if not self.scheduler_running or self.job_is_running() or now < getattr(self, '_next_idle_check', 0):
+            return
+        self._next_idle_check = now + self.IDLE_CHECK_PERIOD_S
+        if nr is not None and (nr.start_time - datetime.datetime.now()).total_seconds() <= self.IDLE_SHUTDOWN_S:
+            return
+        if self.dc.fpga.read_dio('inverter'):
+            self.start_shutdown(f"no run in the next {self.IDLE_SHUTDOWN_S // 60} min"
+                                + ("" if nr is None else f" (next: {nr.runtype.name} at {nr.start_time})"))
+
+    def start_shutdown(self, reason):
+        """Start a RunShutdown job (not refused on alarms: it is what alarms need)."""
+        if self.job_is_running():
+            return False
+        self.log(logging.WARN, f"station shutdown: {reason}")
+        self.runentry = RunEntry(datetime.datetime.now(), RunType.SHUTDOWN, False, True)
+        self.run = RunShutdown(self.dc, self.params)
+        self.job = multiprocessing.Process(target=self.run.execute)
+        self.job.start()
+        return True
 
     def start_scheduler(self):
         self.scheduler_running = True
@@ -95,41 +142,71 @@ class RunManager:
                 return run
         return None
 
-    def submit(self, runentry, source): 
+    RUN_CLASSES = {
+        RunType.FD: RunFD,
+        RunType.RAMAN: RunRaman,
+        RunType.TANK: RunTank,
+        RunType.CALIB: RunCalib,
+        RunType.MOCK: RunMock,
+    }
+
+    def submit(self, runentry, source):
+        """Start a run. Returns True if the job was started."""
         if not isinstance(runentry, RunEntry):
             raise TypeError
-        self.runentry = runentry
-        if self.job_is_running() == False:
-            if len(self.hk.get_alarm()) > 0:
-                self.log(logging.ERROR, f"{self.runentry.runtype.name} run cannot start due to alarms {self.hk.get_alarm()}")
-            else:
-                self.log(logging.INFO, f"start {self.runentry.runtype.name} run")
-                if self.runentry.runtype == RunType.FD:
-                    self.run = RunFD(self.dc, self.params)
-                elif self.runentry.runtype == RunType.RAMAN:
-                    self.run = RunRaman(self.dc, self.params)
-                elif self.runentry.runtype == RunType.TANK:
-                    self.run = RunTank(self.dc, self.params)
-                elif self.runentry.runtype == RunType.CALIB:
-                    self.run = RunCalib(self.dc, self.params)
-                elif self.runentry.runtype == RunType.MOCK:
-                    self.run = RunMock(self.dc, self.params)
+        name = runentry.runtype.name
 
-            if source == 'cli':     # run started from command line interface
-                self.job = multiprocessing.Process(target=self.run.execute)
-                self.job.start()
-            else:                   # run started from scheduler
-                if runentry.last == False:
-                    self.job = multiprocessing.Process(target=self.run.execute, args=(True, False,))
-                else:
-                    self.job = multiprocessing.Process(target=self.run.execute)
-                self.job.start()
+        # self.runentry / self.run describe the job in progress: update them only when a new job starts
+        if self.job_is_running():
+            self.log(logging.ERROR, f"{name} run cannot start due to other job running ({self.runentry.runtype.name})")
+            return False
+
+        alarms = self.hk.get_alarm()
+        if len(alarms) > 0:
+            self.log(logging.ERROR, f"{name} run cannot start due to alarms {alarms}")
+            return False
+
+        run_class = self.RUN_CLASSES.get(runentry.runtype)
+        if run_class is None:
+            self.log(logging.ERROR, f"{name} run cannot start: unknown run type")
+            return False
+
+        self.log(logging.INFO, f"start {name} run")
+        self.runentry = runentry
+        self.run = run_class(self.dc, self.params)
+
+        if source == 'runmanager' and runentry.last == False:
+            # scheduled run that is not the last of the night: keep instruments on (no finish)
+            self.job = multiprocessing.Process(target=self.run.execute, args=(True, False,))
         else:
-            self.log(logging.ERROR, f"{self.runentry.runtype.name} run cannot start due to other job running")
+            self.job = multiprocessing.Process(target=self.run.execute)
+        self.job.start()
+        return True
+
+    def _terminate_job(self):
+        """Terminate the run process without leaving the FPGA in the middle of a transaction.
+
+        The FPGA serial lock is shared with the child: the parent takes it first, so the
+        child completes its current register access and then waits; only then it is
+        terminated. If the lock is not released (child stuck while holding it), the child
+        is terminated anyway and the lock replaced, otherwise every later FPGA access of
+        this process (housekeeping, scheduler, CLI) would wait for a dead owner."""
+        fpga = getattr(self.dc, 'fpga', None)
+        mutex = getattr(fpga, 'mutex', None)
+        acquired = mutex.acquire(timeout=fpga.LOCK_TIMEOUT_S) if mutex is not None else False
+        try:
+            self.job.terminate()
+            self.job.join(5)
+        finally:
+            if acquired:
+                mutex.release()
+        if mutex is not None and not acquired:
+            fpga.mutex = multiprocessing.Lock()
+            self.log(logging.ERROR, "FPGA lock held by the terminated run process: replaced")
 
     def stop(self):
         if self.job_is_running():
-            self.job.terminate()
+            self._terminate_job()
             self.job = multiprocessing.Process(target=self.run.abort)
             self.job.start()
             return 0
@@ -137,7 +214,7 @@ class RunManager:
 
     def kill(self):
         if self.job_is_running():
-            self.job.terminate()
+            self._terminate_job()
             self.log(logging.WARN, f"{self.runentry.runtype.name} run killed")
             return 0
         return -1
@@ -148,14 +225,21 @@ class RunManager:
             if not self.abort_in_progress:
                 self.log(logging.INFO, f"start alarm handling")
                 self.abort_in_progress = True
-                self.job.terminate()
-                self.log(logging.INFO, f"run aborted")
-                self.log(logging.INFO, f"start devices shutdown")
-                self.run.abort()
-                self.log(logging.INFO, f"finish devices shutdown")
-                self.abort_in_progress = False
+                try:
+                    self._terminate_job()
+                    self.log(logging.INFO, f"run aborted")
+                    self.log(logging.INFO, f"start devices shutdown")
+                    self.run.abort()
+                    self.log(logging.INFO, f"finish devices shutdown")
+                finally:
+                    # an exception in abort() must not block the handling of every later alarm
+                    self.abort_in_progress = False
             else:
                 self.log(logging.INFO, f"alarm handling in progress")
+        elif self.dc is not None and self.dc.fpga.read_dio('inverter'):
+            # alarm between runs (auto and manual mode): instruments may still be on
+            # (scheduled runs keep them on until the last run of the night)
+            self.start_shutdown(f"alarm {[a.get('name') for a in msg]}")
 
     def print_status(self):
         if self.job_is_running():

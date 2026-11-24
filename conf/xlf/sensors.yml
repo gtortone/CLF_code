@@ -51,6 +51,7 @@
   value: 0
   coeff: 1
   scalar: -645
+  alarm: False
 
 - dev: ltc
   name: t0
@@ -92,6 +93,103 @@
   alarm: False
   info: ""
 
+- dev: gps
+  name: gps_ns_error          # GPS PPS - local PPS from the FPGA (pps_distance), ns
+  value: 0
+  unit: ns
+  min: -100                   # outside [min, max] (or not readable): blocking alarm
+  max: 100
+  alarm: False
 
+- dev: gps
+  name: gps_fix_age           # age of the last gpsd fix, s
+  value: 0
+  unit: s
+  min: 0
+  max: 60                     # older (or no fix time): blocking alarm
+  alarm: False
 
+# receiver / time reference information from gpsd (lib/GpsInfo.py), no alarm.
+# Kept at the end of the file: hk.csv has no header, columns follow this order.
 
+- dev: gps
+  name: gps_sats_used
+  value: .nan
+
+- dev: gps
+  name: gps_sats_visible
+  value: .nan
+
+- dev: gps
+  name: gps_snr_mean
+  value: .nan
+  unit: dBHz
+
+- dev: gps
+  name: gps_hdop
+  value: .nan
+
+- dev: gps
+  name: gps_tdop
+  value: .nan
+
+- dev: gps
+  name: gps_lat
+  value: .nan
+  unit: deg
+
+- dev: gps
+  name: gps_lon
+  value: .nan
+  unit: deg
+
+- dev: gps
+  name: gps_alt
+  value: .nan
+  unit: m
+
+- dev: gps
+  name: gps_clock_offset
+  value: .nan
+  unit: s
+
+- dev: gps
+  name: gps_leapseconds
+  value: .nan
+  unit: s
+
+# UBX messages of the u-blox receiver via gpsd raw=1 (lib/GpsInfo.py), no alarm (warnings only)
+
+- dev: gps
+  name: gps_tacc_ns           # NAV-TIMEGPS time accuracy estimate
+  value: .nan
+  unit: ns
+
+- dev: gps
+  name: gps_time_valid        # NAV-TIMEGPS: TOW, week and leap seconds valid (1/0)
+  value: .nan
+
+- dev: gps
+  name: gps_holdover          # MON-SMGR: 1 = disciplining source not GNSS (holdover)
+  value: .nan
+
+- dev: gps
+  name: gps_osc_drift         # NAV-CLOCK oscillator drift
+  value: .nan
+  unit: ns/s
+
+- dev: gps
+  name: gps_agc               # MON-HW AGC (0..8191)
+  value: .nan
+
+- dev: gps
+  name: gps_jam               # MON-HW jamming indicator (0..255)
+  value: .nan
+
+# FPGA register 0x27 (hw v2 only, NaN on v1): 1 = the 122.88 MHz clock MMCM lost lock
+# since the previous cycle (read, then cleared). Logged as WARNING; add 'alarm: False'
+# to also make it a blocking alarm (the run in progress is aborted).
+
+- dev: fpga
+  name: fpga_lock_lost
+  value: .nan
