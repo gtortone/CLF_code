@@ -98,7 +98,7 @@ case "$1" in
         ;;
     status)
         # systemctl status exits 3 when the unit is not running: not an error here
-        systemctl status --no-pager "$SERVICE"
+        systemctl status --no-pager "$SERVICE" >/dev/null
         rc=$?
         echo
         print_state
