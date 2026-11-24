@@ -252,7 +252,7 @@ def main():
     t0, t1 = night_window(night)
 
     expected = expected_runs(params, t0, t1)
-    runs_all, refusals_all, _ = lp.parse_runs(args.logs)
+    runs_all, refusals_all, _ = lp.parse_runs(args.logs, t0 - 86400)    # not years of old logs
     runs = [r for r in runs_all if t0 <= r["start"] < t1]
     refusals = [f for f in refusals_all if t0 <= f["t"] < t1]
     _, events = lp.parse_events(args.logs, t0, t1)

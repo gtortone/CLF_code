@@ -11,6 +11,7 @@ Both log formats are understood:
 Files are parsed once and cached by (size, mtime): rotated files never change.
 """
 
+import calendar
 import datetime as dt
 import glob
 import math
@@ -44,9 +45,18 @@ STALE_S = 5            # packet seconds this far from the log time: packet of an
 INVALID_HK = 1e5       # e.g. LTC2983 faulted channel read as 4193305 C by the old code
 
 
+_hour_epoch = {}
+
+
 def _epoch(date_s, ms):
-    return dt.datetime.strptime(date_s, "%Y-%m-%d %H:%M:%S").replace(
-        tzinfo=dt.timezone.utc).timestamp() + int(ms) / 1000
+    """'YYYY-MM-DD HH:MM:SS' (UTC) + milliseconds -> unix time. strptime is far too slow
+    for millions of log lines: the hour is converted once, minutes and seconds added."""
+    hour = date_s[:13]
+    base = _hour_epoch.get(hour)
+    if base is None:
+        base = calendar.timegm((int(hour[:4]), int(hour[5:7]), int(hour[8:10]), int(hour[11:13]), 0, 0))
+        _hour_epoch[hour] = base
+    return base + int(date_s[14:16]) * 60 + int(date_s[17:19]) + int(ms) / 1000
 
 
 def _float(text):
@@ -73,9 +83,27 @@ def _cached(path, parser):
     return data
 
 
-def _files(log_dir, base):
-    """Rotated files (base.YYYY-MM-DD) in date order, then the current one."""
+# A rotated file base.YYYY-MM-DD holds the lines up to the rollover (18:00 local) after
+# that day; if the program was stopped it can start earlier, never end later.
+ROTATED_SLACK_S = 3 * 86400
+SUFFIX_RE = re.compile(r"\.(\d{4}-\d\d-\d\d)$")
+
+
+def _files(log_dir, base, t_from=None):
+    """Rotated files (base.YYYY-MM-DD) in date order, then the current one.
+    With t_from, rotated files that end before t_from are left out (not even read):
+    years of old logs must not be parsed to show the last days."""
     rotated = sorted(glob.glob(os.path.join(log_dir, base + ".*")))
+    if t_from:
+        kept = []
+        for path in rotated:
+            m = SUFFIX_RE.search(path)
+            if m:
+                day = calendar.timegm(dt.date.fromisoformat(m.group(1)).timetuple())
+                if day + ROTATED_SLACK_S < t_from:
+                    continue
+            kept.append(path)
+        rotated = kept
     current = os.path.join(log_dir, base)
     return rotated + ([current] if os.path.isfile(current) else [])
 
@@ -151,10 +179,10 @@ def _summarise(run):
     return run
 
 
-def parse_runs(log_dir):
-    """(runs, refusals, kills) over all run.log files, in time order."""
+def parse_runs(log_dir, t_from=None):
+    """(runs, refusals, kills) over the run.log files (from t_from, default all), in time order."""
     lines = []
-    for path in _files(log_dir, "run.log"):
+    for path in _files(log_dir, "run.log", t_from):
         lines.extend(_cached(path, _parse_run_file))
     lines.sort(key=lambda x: x[0])
 
@@ -236,7 +264,7 @@ def _parse_hk_file(path):
 def hk_rows(log_dir, t_from, t_to):
     """[(t, {name: (value, unit, is_bool)})] of the INFO lines of hk.log in [t_from, t_to], unbinned."""
     rows = []
-    for path in _files(log_dir, "hk.log"):
+    for path in _files(log_dir, "hk.log", t_from):
         rows.extend(r for r in _cached(path, _parse_hk_file) if t_from <= r[0] <= t_to)
     rows.sort(key=lambda r: r[0])
     return rows
@@ -287,12 +315,27 @@ def _parse_hk_events(path):
     return out
 
 
+def _parse_events_file(path):
+    """WARNING / ERROR lines of run.log / device.log (device.log can be large: the
+    other lines are skipped before the regular expression and never kept)."""
+    out = []
+    with open(path, encoding="utf-8", errors="replace") as f:
+        for line in f:
+            if " - WARNING - " not in line and " - ERROR - " not in line:
+                continue
+            m = LINE_RE.match(line.rstrip("\n"))
+            if m:
+                d, ms, cls, func, level, msg = m.groups()
+                out.append((_epoch(d, ms), cls, func, level, msg))
+    return out
+
+
 def parse_events(log_dir, t_from, t_to, limit=300):
     """(most recent `limit` WARNING/ERROR events, all of them in the range)."""
     events = []
-    for base, parser in (("run.log", _parse_run_file), ("device.log", _parse_run_file),
+    for base, parser in (("run.log", _parse_events_file), ("device.log", _parse_events_file),
                          ("hk.log", _parse_hk_events)):
-        for path in _files(log_dir, base):
+        for path in _files(log_dir, base, t_from):
             for t, cls, func, level, msg in _cached(path, parser):
                 if level in ("WARNING", "ERROR") and t_from <= t <= t_to:
                     source = f"{cls}::{func}" if func else cls
