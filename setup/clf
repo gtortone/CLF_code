@@ -1,0 +1,102 @@
+#!/usr/bin/env bash
+# clf - control script for clf.service
+
+SERVICE="clf.service"
+PROCESS_PATTERN="main.py"
+
+usage() {
+    echo "Usage: $(basename "$0") {start|stop|kill}" >&2
+    echo "Run '$(basename "$0")' without arguments for detailed help." >&2
+    exit 1
+}
+
+# Verbose help, shown when no argument is given or with -h/--help
+show_help() {
+    local name
+    name=$(basename "$0")
+    cat <<EOF
+$name - control script for $SERVICE
+
+Usage:
+  $name <command>
+
+Commands:
+  start     Start $SERVICE (systemctl start $SERVICE).
+            Prints OK/FAIL and the resulting service state.
+
+  stop      Stop $SERVICE (systemctl stop $SERVICE).
+            Prints OK/FAIL and the resulting service state.
+            Use this if you want $PROCESS_PATTERN to stay down.
+
+  kill      Kill the $PROCESS_PATTERN process with SIGKILL (kill -9).
+            NOTE: $SERVICE will restart $PROCESS_PATTERN shortly
+            afterwards. To keep it stopped, run '$name stop'.
+
+  -h, --help
+            Show this help.
+
+Examples:
+  $name start
+  $name stop
+  $name kill
+EOF
+}
+
+# Run a systemctl action on the service and report the outcome
+run_systemctl() {
+    local action="$1"
+    local output rc
+
+    output=$(systemctl "$action" "$SERVICE" 2>&1)
+    rc=$?
+
+    if [ $rc -eq 0 ]; then
+        echo "systemctl $action $SERVICE: OK"
+    else
+        echo "systemctl $action $SERVICE: FAIL (exit code $rc)" >&2
+        [ -n "$output" ] && echo "$output" >&2
+    fi
+
+    # Show the resulting service state (active, inactive, failed, ...)
+    echo "Service state: $(systemctl is-active "$SERVICE" 2>/dev/null)"
+
+    return $rc
+}
+
+if [ $# -eq 0 ]; then
+    show_help
+    exit 1
+fi
+
+[ $# -eq 1 ] || usage
+
+case "$1" in
+    -h|--help)
+        show_help
+        exit 0
+        ;;
+    start|stop)
+        run_systemctl "$1"
+        exit $?
+        ;;
+    kill)
+        pids=$(pgrep -f "$PROCESS_PATTERN")
+        if [ -z "$pids" ]; then
+            echo "No $PROCESS_PATTERN process found" >&2
+            exit 1
+        fi
+        echo "Killing $PROCESS_PATTERN (PID: $pids)"
+        if kill -9 $pids; then
+            echo "kill: OK"
+        else
+            echo "kill: FAIL" >&2
+            exit 1
+        fi
+        echo
+        echo "WARNING: $SERVICE will restart $PROCESS_PATTERN shortly."
+        echo "         If you do not want it to restart, run: $(basename "$0") stop"
+        ;;
+    *)
+        usage
+        ;;
+esac
