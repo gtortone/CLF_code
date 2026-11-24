@@ -115,27 +115,23 @@ class App(cmd2.Cmd):
         str.lower(RunType.TANK.name),
         str.lower(RunType.CALIB.name),
         str.lower(RunType.MOCK.name)])
+    start_parser.add_argument('-f', '--finish', action='store_true',
+        help="at the end of the run switch everything off (as the last run of the night); "
+             "default: leave the instruments on for the next tests")
 
     @cmd2.with_category('System Control')
     @cmd2.with_argparser(start_parser)
     def do_start(self, arg):
-        """start a run"""
+        """start a run (instruments left on, unless --finish)"""
         if self.mode == 'auto':
             print("E: set mode to manual")
             return
 
-        if arg.runtype == 'raman':
-            run = RunEntry(datetime.now(), RunType.RAMAN, False, False)
-        elif arg.runtype == 'fd':
-            run = RunEntry(datetime.now(), RunType.FD, False, False)
-        elif arg.runtype == 'tank':
-            run = RunEntry(datetime.now(), RunType.TANK, False, False)
-        elif arg.runtype == 'calib':
-            run = RunEntry(datetime.now(), RunType.CALIB, False, False)
-        elif arg.runtype == 'mock':
-            run = RunEntry(datetime.now(), RunType.MOCK, False, False)
-             
-        self.rm.submit(run, source='cli')
+        # last=True: finish at the end of the run (RunManager.submit)
+        run = RunEntry(datetime.now(), RunType[arg.runtype.upper()], False, arg.finish)
+        if self.rm.submit(run, source='cli'):
+            print(f"{arg.runtype} run started, " + ("finish (all off) at the end" if arg.finish
+                  else "instruments left on at the end ('shutdown' to switch off)"))
 
     ## stop ##
     @cmd2.with_category('System Control')

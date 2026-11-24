@@ -93,8 +93,8 @@ def test_busy_keeps_running_entry(rm):
 @pytest.mark.parametrize("source,last,expected_args", [
     ("runmanager", False, (True, False)),        # keep instruments on between scheduled runs
     ("runmanager", True, (True, True)),          # last run of the night: finish (all off)
-    ("cli", False, (True, False)),               # manual run: never finish (tests go on)
-    ("cli", True, (True, False)),
+    ("cli", False, (True, False)),               # manual run: instruments left on (tests go on)
+    ("cli", True, (True, True)),                 # manual run with --finish
 ])
 def test_execute_arguments(rm, source, last, expected_args):
     assert rm.submit(entry(RunType.FD, last=last), source=source)

@@ -190,9 +190,9 @@ class RunManager:
             self.scheduler_powered = not runentry.last
             args = (True, bool(runentry.last))
         else:
-            # manual run (cli): never finish, the instruments stay on for the next tests;
-            # the 'shutdown' command switches everything off
-            args = (True, False)
+            # manual run (cli): finish only if asked ('start <run> --finish' -> last=True),
+            # otherwise the instruments stay on for the next tests ('shutdown' switches off)
+            args = (True, bool(runentry.last))
         self.job = multiprocessing.Process(target=self.run.execute, args=args)
         self.job.start()
         return True
