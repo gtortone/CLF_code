@@ -86,7 +86,8 @@ class RunBase:
         if p is None:
             seconds, counter, pps, counter_cycles = 0, 0, 0, 0        # 0 = no packet for this shot
         else:
-            seconds, counter, pps, counter_cycles = p.seconds, p.counter, p.pps_delta, p.shot
+            # whole ns: the tick is 10 ns (hw v1) or 32.55 ns (hw v2), decimals add nothing
+            seconds, counter, pps, counter_cycles = p.seconds, round(p.counter), round(p.pps_delta), p.shot
         gps_seconds = unix_to_gps(seconds) if seconds else 0
         self.log(logging.INFO, f'power {i} shot: {power}, gps_seconds: {gps_seconds}, counter: {counter}, '
                                f'pps distance: {pps}ns, counter cycle: {counter_cycles}', stacklevel=2)

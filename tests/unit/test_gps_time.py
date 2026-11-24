@@ -118,6 +118,20 @@ def test_shot_log_uses_gps_seconds(monkeypatch):
     assert "gps_seconds: 1419724818," in lines[0]
 
 
+def test_shot_log_whole_ns():
+    class Data:
+        def read_shot(self, n, timeout_s):
+            # hw v2: 32.552083... ns ticks
+            return Packet(1_735_689_600, 249_994_080.33333334, -32.552083333333336, n, "")
+    dc = FakeDC()
+    dc.data = Data()
+    run = RunFD(dc, {"identity": "clf", "clf": {}})
+    lines = []
+    run.log = lambda lvl, msg, **kw: lines.append(msg)
+    run.log_shot(0, 'Rad1')
+    assert "counter: 249994080, pps distance: -33ns," in lines[0]
+
+
 def test_shot_log_failed_read_stays_zero():
     class Data:
         def read_shot(self, n, timeout_s):
