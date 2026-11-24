@@ -9,7 +9,7 @@ PROCESS_CMD="/usr/bin/python3 main.py"
 PROCESS_REGEX='^/usr/bin/python3 main\.py$'
 
 usage() {
-    echo "Usage: $(basename "$0") {start|stop|kill}" >&2
+    echo "Usage: $(basename "$0") {start|stop|status|kill}" >&2
     echo "Run '$(basename "$0")' without arguments for detailed help." >&2
     exit 1
 }
@@ -32,6 +32,9 @@ Commands:
             Prints OK/FAIL and the resulting service state.
             Use this if you want $PROCESS_NAME to stay down.
 
+  status    Show the output of 'systemctl status $SERVICE'
+            followed by the service state (active/stopped).
+
   kill      Kill the process "$PROCESS_CMD" with SIGKILL (kill -9).
             NOTE: $SERVICE will restart $PROCESS_NAME shortly
             afterwards. To keep it stopped, run '$name stop'.
@@ -42,8 +45,19 @@ Commands:
 Examples:
   $name start
   $name stop
+  $name status
   $name kill
 EOF
+}
+
+# Print the service state, mapping inactive/failed to "stopped"
+print_state() {
+    local state
+    state=$(systemctl is-active "$SERVICE" 2>/dev/null)
+    case "$state" in
+        inactive|failed) state="stopped" ;;
+    esac
+    echo "Service state: $state"
 }
 
 # Run a systemctl action on the service and report the outcome
@@ -61,13 +75,7 @@ run_systemctl() {
         [ -n "$output" ] && echo "$output" >&2
     fi
 
-    # Show the resulting service state, mapping inactive/failed to "stopped"
-    local state
-    state=$(systemctl is-active "$SERVICE" 2>/dev/null)
-    case "$state" in
-        inactive|failed) state="stopped" ;;
-    esac
-    echo "Service state: $state"
+    print_state
 
     return $rc
 }
@@ -87,6 +95,16 @@ case "$1" in
     start|stop)
         run_systemctl "$1"
         exit $?
+        ;;
+    status)
+        # systemctl status exits 3 when the unit is not running: not an error here
+        systemctl status --no-pager "$SERVICE"
+        rc=$?
+        echo
+        print_state
+        # Exit codes 0 (running) and 3 (not running) are both valid answers
+        [ $rc -eq 0 ] || [ $rc -eq 3 ] || exit $rc
+        exit 0
         ;;
     kill)
         pids=$(pgrep -f "$PROCESS_REGEX")
