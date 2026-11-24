@@ -56,6 +56,7 @@ class RunManager:
         self.run = None
         self.job = None
         self.scheduler_running = True
+        self.scheduler_powered = False      # instruments left on by a scheduled run
         self.loop = True
         self.abort_in_progress = False
 
@@ -89,12 +90,10 @@ class RunManager:
                 if nr in self.runlist:
                     self.runlist.remove(nr)
                 nr = self.next_run()
-            #
-            # disable idle check
-            #try:
-            #    self.idle_check(nr)
-            #except Exception as e:
-            #    self.log(logging.ERROR, f"idle shutdown check failed: {e!r}", exc_info=True)
+            try:
+                self.idle_check(nr)
+            except Exception as e:
+                self.log(logging.ERROR, f"idle shutdown check failed: {e!r}", exc_info=True)
             time.sleep(1)
 
     # no run within this time and instruments still powered (inverter on): shut down.
@@ -105,9 +104,13 @@ class RunManager:
     def idle_check(self, nr):
         """Auto mode only: shut the station down when nothing is running, the inverter is
         on and the next run is more than IDLE_SHUTDOWN_S away (or there is none), e.g.
-        when the last run of the night did not start (alarm, manual mode, busy)."""
+        when the last run of the night did not start (alarm, manual mode, busy).
+
+        Only instruments left on by the scheduler are switched off: what was powered by
+        hand (manual mode, tests, main.py just started) is never touched."""
         now = time.monotonic()
-        if not self.scheduler_running or self.job_is_running() or now < getattr(self, '_next_idle_check', 0):
+        if (not self.scheduler_running or not getattr(self, 'scheduler_powered', False)
+                or self.job_is_running() or now < getattr(self, '_next_idle_check', 0)):
             return
         self._next_idle_check = now + self.IDLE_CHECK_PERIOD_S
         if nr is not None and (nr.start_time - datetime.datetime.now()).total_seconds() <= self.IDLE_SHUTDOWN_S:
@@ -121,6 +124,7 @@ class RunManager:
         if self.job_is_running():
             return False
         self.log(logging.WARN, f"station shutdown: {reason}")
+        self.scheduler_powered = False
         self.runentry = RunEntry(datetime.datetime.now(), RunType.SHUTDOWN, False, True)
         self.run = RunShutdown(self.dc, self.params)
         self.job = multiprocessing.Process(target=self.run.execute)
@@ -131,7 +135,10 @@ class RunManager:
         self.scheduler_running = True
 
     def stop_scheduler(self):
+        # manual mode: the people on site own the instruments now, no idle shutdown
+        # (not even after going back to auto) until a scheduled run powers them again
         self.scheduler_running = False
+        self.scheduler_powered = False
     
     def job_is_running(self):
         if self.job is None:
@@ -177,12 +184,16 @@ class RunManager:
         self.runentry = runentry
         self.run = run_class(self.dc, self.params)
 
-        if source == 'runmanager' and runentry.last == False:
-            # scheduled run that is not the last of the night: keep instruments on (no finish)
-            self.job = multiprocessing.Process(target=self.run.execute, args=(True, False,))
+        if source == 'runmanager':
+            # scheduled: keep the instruments on between the runs of the night, finish
+            # (all off) after the last one; if that one does not come, idle_check does it
+            self.scheduler_powered = not runentry.last
+            args = (True, bool(runentry.last))
         else:
-            # ask to user if finish run
-            self.job = multiprocessing.Process(target=self.run.execute, args=(True, False,))
+            # manual run (cli): never finish, the instruments stay on for the next tests;
+            # the 'shutdown' command switches everything off
+            args = (True, False)
+        self.job = multiprocessing.Process(target=self.run.execute, args=args)
         self.job.start()
         return True
 

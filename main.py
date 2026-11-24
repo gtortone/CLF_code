@@ -587,6 +587,19 @@ class App(cmd2.Cmd):
         else:
             self.do_help("inverter on/off")
 
+    ######### shutdown
+    @cmd2.with_category('System Control')
+    def do_shutdown(self, _):
+        """safe state: laser off, covers closed, outlets and inverter off (manual runs leave everything on)"""
+        if self.mode == 'auto':
+            print("E: set mode to manual")
+            return
+        if self.rm.job_is_running():
+            print(f"E: run {self.rm.runentry.runtype.name} in progress, stop it first")
+            return
+        if self.rm.start_shutdown("shutdown command (manual)"):
+            print("shutdown started (see 'status')")
+
     ######### system_init
     @cmd2.with_category('System Control')  
     def do_system_init(self, _):
