@@ -23,13 +23,14 @@ app.config["LOG_DIR"] = os.path.join(ROOT, "logs")
 _runs_memo = {}
 
 
-def _runs():
-    """parse_runs() memoized on the state of the run.log files."""
+def _runs(t_from=None):
+    """parse_runs() from t_from (None: all), memoized on the state of the run.log files read."""
     log_dir = app.config["LOG_DIR"]
-    key = tuple((p, os.path.getsize(p), os.path.getmtime(p)) for p in lp._files(log_dir, "run.log"))
+    files = lp._files(log_dir, "run.log", t_from)
+    key = (t_from, tuple((p, os.path.getsize(p), os.path.getmtime(p)) for p in files))
     if _runs_memo.get("key") != key:
         _runs_memo["key"] = key
-        _runs_memo["value"] = lp.parse_runs(log_dir)
+        _runs_memo["value"] = lp.parse_runs(log_dir, t_from)
     return _runs_memo["value"]
 
 
@@ -96,7 +97,7 @@ def data():
     days = request.args.get("days", default=3, type=float)
     t_to = lp.latest_time(log_dir)
     t_from = 0.0 if days <= 0 else t_to - days * 86400
-    runs_all, refusals_all, kills_all = _runs()
+    runs_all, refusals_all, kills_all = _runs(t_from or None)
     runs = [r for r in runs_all if t_from <= r["start"] <= t_to]
     refusals = [f for f in refusals_all if t_from <= f["t"] <= t_to]
     events, all_events = lp.parse_events(log_dir, t_from, t_to)
@@ -128,7 +129,11 @@ def data():
 
 @app.route("/api/run/<run_id>")
 def run_detail(run_id):
-    for r in _runs()[0]:
+    try:
+        t_start = float(run_id.rsplit("-", 1)[1])       # id = TYPE-<unix start>
+    except (IndexError, ValueError):
+        abort(404)
+    for r in lp.parse_runs(app.config["LOG_DIR"], t_start - 86400)[0]:
         if r["id"] == run_id:
             return jsonify(r)
     abort(404)

@@ -79,3 +79,31 @@ def test_events_from_all_logs(logs):
 def test_night_of():
     assert lp.night_of(lp._epoch("2025-12-13 01:36:32", "0")) == "2025-12-12"
     assert lp.night_of(lp._epoch("2025-12-12 23:10:00", "0")) == "2025-12-12"
+
+
+def test_epoch_matches_strptime():
+    import datetime as dt
+    for s, ms in (("2025-12-13 01:36:32", "375"), ("2024-02-29 23:59:59", "999"), ("2026-01-01 00:00:00", "0")):
+        ref = dt.datetime.strptime(s, "%Y-%m-%d %H:%M:%S").replace(tzinfo=dt.timezone.utc).timestamp()
+        assert lp._epoch(s, ms) == pytest.approx(ref + int(ms) / 1000)
+
+
+def test_old_rotated_files_outside_the_range_are_not_read(tmp_path, monkeypatch):
+    for name in ("hk.log.2024-03-01", "hk.log.2026-10-19", "hk.log.2026-10-20", "hk.log.oddname", "hk.log"):
+        (tmp_path / name).write_text(HK_LOG)
+    t = lp._epoch("2026-10-21 18:00:02", "170")
+    names = [os.path.basename(p) for p in lp._files(str(tmp_path), "hk.log", t - 3 * 86400)]
+    assert names == ["hk.log.2026-10-19", "hk.log.2026-10-20", "hk.log.oddname", "hk.log"]
+    assert len(lp._files(str(tmp_path), "hk.log")) == 5           # no range: all of them
+
+    read = []
+    monkeypatch.setattr(lp, "_parse_hk_file", lambda p, real=lp._parse_hk_file: read.append(p) or real(p))
+    lp.hk_rows(str(tmp_path), t - 86400, t + 60)
+    assert not any(p.endswith("2024-03-01") for p in read)
+
+
+def test_events_keep_only_warnings_and_errors(tmp_path):
+    (tmp_path / "device.log").write_text(
+        "2026-10-21 18:00:00,000 - VXM::cmd - DEBUG - lots of dialogue\n"
+        "2026-10-21 18:00:01,000 - VXM::cmd - WARNING - no answer\n")
+    assert [(e[3], e[4]) for e in lp._parse_events_file(str(tmp_path / "device.log"))] == [("WARNING", "no answer")]

@@ -53,10 +53,10 @@ def test_unknown_dio_name_rejected(fpga):
 
 # --- sensors --------------------------------------------------------------------------------
 
-def test_clf_rain_alarm_disabled_by_config():
-    rain = [d for d in sensors("clf") if d["name"] == "rain"][0]
-    assert "alarm" not in rain
-    assert "alarm" in [d for d in sensors("xlf") if d["name"] == "rain"][0]
+def test_rain_alarm_enabled_at_both_sites():
+    # CLF: enabled again in the field (2026-11-24, weather station on its own USB adapter)
+    for site in ("clf", "xlf"):
+        assert "alarm" in [d for d in sensors(site) if d["name"] == "rain"][0]
 
 
 @pytest.mark.parametrize("site", ["clf", "xlf"])

@@ -3,6 +3,12 @@
 import pytest
 
 import lib.RPC as rpc_module
+
+if not hasattr(rpc_module, "parse_status"):
+    # 2026-11-24: RPC.py back to the field-tested version (the new one did not work with
+    # the RPC on site); these tests come back with the next, small, step on the RPC
+    pytest.skip("RPC.py is the field version, no parse_status", allow_module_level=True)
+
 from lib.RPC import RPCOutlet, parse_status
 
 

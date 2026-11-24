@@ -85,6 +85,7 @@ def make_rm(monkeypatch):
         rm.dc = station(CLF_OUTLETS, inverter)
         rm.params = {"identity": "clf", "clf": {}}
         rm.scheduler_running = auto
+        rm.scheduler_powered = True
         rm.job = rm.run = rm.runentry = None
         rm.abort_in_progress = False
         rm.messages = []
@@ -117,6 +118,36 @@ def test_idle_not_in_manual_mode(make_rm):
     rm = make_rm(auto=False)
     rm.idle_check(None)
     assert not shutdown_started(rm)
+
+
+def test_idle_not_for_instruments_powered_by_hand(make_rm):
+    rm = make_rm()
+    rm.scheduler_powered = False                # e.g. main.py just started, or after tests
+    rm.idle_check(None)
+    assert not shutdown_started(rm)
+
+
+def test_manual_mode_hands_the_instruments_over(make_rm):
+    rm = make_rm()
+    rm.stop_scheduler()
+    rm.start_scheduler()                        # back to auto after the tests
+    rm.idle_check(None)
+    assert not shutdown_started(rm)
+
+
+@pytest.mark.parametrize("last,powered", [(False, True), (True, False)])
+def test_scheduled_runs_set_who_powered(make_rm, last, powered):
+    rm = make_rm()
+    rm.scheduler_powered = False
+    rm.hk = type("HK", (), {"get_alarm": lambda self: []})()
+    assert rm.submit(RunEntry(datetime.datetime.now(), RunType.MOCK, False, last), source="runmanager")
+    assert rm.scheduler_powered is powered
+
+
+def test_shutdown_clears_scheduler_powered(make_rm):
+    rm = make_rm(next_in_min=None)
+    rm.idle_check(None)
+    assert shutdown_started(rm) and rm.scheduler_powered is False
 
 
 def test_idle_not_when_already_off(make_rm):
