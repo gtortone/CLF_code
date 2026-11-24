@@ -2,7 +2,11 @@
 # clf - control script for clf.service
 
 SERVICE="clf.service"
-PROCESS_PATTERN="main.py"
+PROCESS_NAME="main.py"
+# Exact command line of the process to kill
+PROCESS_CMD="/usr/bin/python3 main.py"
+# Anchored regex for pgrep -f (dot escaped to match literally)
+PROCESS_REGEX='^/usr/bin/python3 main\.py$'
 
 usage() {
     echo "Usage: $(basename "$0") {start|stop|kill}" >&2
@@ -26,10 +30,10 @@ Commands:
 
   stop      Stop $SERVICE (systemctl stop $SERVICE).
             Prints OK/FAIL and the resulting service state.
-            Use this if you want $PROCESS_PATTERN to stay down.
+            Use this if you want $PROCESS_NAME to stay down.
 
-  kill      Kill the $PROCESS_PATTERN process with SIGKILL (kill -9).
-            NOTE: $SERVICE will restart $PROCESS_PATTERN shortly
+  kill      Kill the process "$PROCESS_CMD" with SIGKILL (kill -9).
+            NOTE: $SERVICE will restart $PROCESS_NAME shortly
             afterwards. To keep it stopped, run '$name stop'.
 
   -h, --help
@@ -57,8 +61,13 @@ run_systemctl() {
         [ -n "$output" ] && echo "$output" >&2
     fi
 
-    # Show the resulting service state (active, inactive, failed, ...)
-    echo "Service state: $(systemctl is-active "$SERVICE" 2>/dev/null)"
+    # Show the resulting service state, mapping inactive/failed to "stopped"
+    local state
+    state=$(systemctl is-active "$SERVICE" 2>/dev/null)
+    case "$state" in
+        inactive|failed) state="stopped" ;;
+    esac
+    echo "Service state: $state"
 
     return $rc
 }
@@ -80,12 +89,12 @@ case "$1" in
         exit $?
         ;;
     kill)
-        pids=$(pgrep -f "$PROCESS_PATTERN")
+        pids=$(pgrep -f "$PROCESS_REGEX")
         if [ -z "$pids" ]; then
-            echo "No $PROCESS_PATTERN process found" >&2
+            echo "No \"$PROCESS_CMD\" process found" >&2
             exit 1
         fi
-        echo "Killing $PROCESS_PATTERN (PID: $pids)"
+        echo "Killing \"$PROCESS_CMD\" (PID: $pids)"
         if kill -9 $pids; then
             echo "kill: OK"
         else
@@ -93,7 +102,7 @@ case "$1" in
             exit 1
         fi
         echo
-        echo "WARNING: $SERVICE will restart $PROCESS_PATTERN shortly."
+        echo "WARNING: $SERVICE will restart $PROCESS_NAME shortly."
         echo "         If you do not want it to restart, run: $(basename "$0") stop"
         ;;
     *)
