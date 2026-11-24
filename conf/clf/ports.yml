@@ -56,7 +56,7 @@ Cover_box_steering:
   timeout: 1
 
 weather_Station:
-  port: "/dev/ttyr07"
+  port: "/dev/weather"
   baudrate: 9600
   bytesize: 8
   parity: 'N'

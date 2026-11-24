@@ -340,7 +340,6 @@ class App(cmd2.Cmd):
             return
         self.dc.get_outlet("RAMAN_cover").off()
         time.sleep(1)
-        self.dc.get_outlet("RAMAN_inst").off()
         cover_timeout_s = 120
         t = 0
         while self.dc.fpga.read_dio('cover_raman_open') == True:
@@ -349,7 +348,7 @@ class App(cmd2.Cmd):
                 return
             time.sleep(1)
             t += 1
-    
+        self.dc.get_outlet("RAMAN_inst").off()
     
     def RamanCover_status(self, args):
         if self.mode == 'auto':
@@ -546,8 +545,50 @@ class App(cmd2.Cmd):
         self.dc.fpga.write_dio('laser_start', 1)
         #print("Manual fire done.")
 
-    ######### system_init
+    # inverter
+
+    #def inverter(self, args):
+    #    if self.mode == 'auto':
+    #        print("E: set mode to manual")
+    #        return
+    #    if args.state == 'on':
+    #        self.dc.fpga.write_dio('inverter', True)
+    #    else:
+    #        self.dc.fpga.write_dio('inverter', False)
+
+    inverter_parser = cmd2.Cmd2ArgumentParser()
+    inverter_subparser = inverter_parser.add_subparsers(title='subcommands')
+
+    inverter_on_subparser = inverter_subparser.add_parser("on", help="inverter power on")
+    inverter_off_subparser = inverter_subparser.add_parser("off", help="inverter power off")
+
+    def inverter_on(self, args):
+        if self.mode == 'auto':
+            print("E: set mode to manual")
+            return
+        self.dc.fpga.write_dio('inverter', True)
+
+    def inverter_off(self, args):
+        if self.mode == 'auto':
+            print("E: set mode to manual")
+            return
+        self.dc.fpga.write_dio('inverter', False)
+
+    inverter_on_subparser.set_defaults(func=inverter_on)
+    inverter_off_subparser.set_defaults(func=inverter_off)
+
     @cmd2.with_category('System Control')
+    @cmd2.with_argparser(inverter_parser)
+    def do_inverter(self, _):
+        """manage inverter"""
+        func = getattr(_, 'func', None)
+        if func is not None:
+            func(self, _)
+        else:
+            self.do_help("inverter on/off")
+
+    ######### system_init
+    @cmd2.with_category('System Control')  
     def do_system_init(self, _):
         """system initialization"""
         if self.mode == 'auto':

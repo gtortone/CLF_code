@@ -4,7 +4,7 @@
   channel: 0
   value: 0
   unit: V
-  coeff: 0.012698329443235162
+  coeff: 0.017660972
   scalar: 0
   min: 11.5
   max: 16
@@ -15,7 +15,7 @@
   channel: 1
   value: 0
   unit: V
-  coeff: 0.012857486052905534
+  coeff: 0.01775266
   scalar: 0
   min: 11.5
   max: 16
@@ -26,7 +26,7 @@
   channel: 2
   value: 0
   unit: V
-  coeff: 0.012580072988236255
+  coeff: 0.01714703
   scalar: 0
 
 - dev: tla
@@ -34,7 +34,7 @@
   channel: 5
   value: 0
   unit: V
-  coeff: 0.012
+  coeff: 0.001925391
   scalar: 0
 
 - dev: tla
@@ -42,7 +42,7 @@
   channel: 7
   value: 0
   unit: V
-  coeff: 0.012597657636342127
+  coeff: 0.014535379
   scalar: 0
 
 - dev: ltc
@@ -78,8 +78,7 @@
 - dev: dio
   name: rain
   value: False
-  # alarm disabled at the CLF (as in the code running on site, 2026-10-22):
-  # add 'alarm: False' back to enable it (rain or rain==norain -> blocking alarm)
+  alarm: False
 
 - dev: dio
   name: cover_steer_open

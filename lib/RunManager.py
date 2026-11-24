@@ -89,10 +89,12 @@ class RunManager:
                 if nr in self.runlist:
                     self.runlist.remove(nr)
                 nr = self.next_run()
-            try:
-                self.idle_check(nr)
-            except Exception as e:
-                self.log(logging.ERROR, f"idle shutdown check failed: {e!r}", exc_info=True)
+            #
+            # disable idle check
+            #try:
+            #    self.idle_check(nr)
+            #except Exception as e:
+            #    self.log(logging.ERROR, f"idle shutdown check failed: {e!r}", exc_info=True)
             time.sleep(1)
 
     # no run within this time and instruments still powered (inverter on): shut down.
@@ -179,7 +181,8 @@ class RunManager:
             # scheduled run that is not the last of the night: keep instruments on (no finish)
             self.job = multiprocessing.Process(target=self.run.execute, args=(True, False,))
         else:
-            self.job = multiprocessing.Process(target=self.run.execute)
+            # ask to user if finish run
+            self.job = multiprocessing.Process(target=self.run.execute, args=(True, False,))
         self.job.start()
         return True
 

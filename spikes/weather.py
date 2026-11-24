@@ -3,7 +3,7 @@ import time
 
 NSEC = 0.2
 
-s = serial.Serial("/dev/ttyr07", 9600)
+s = serial.Serial("/dev/weather", 9600)
 
 # init
 s.write("\r\n".encode())
