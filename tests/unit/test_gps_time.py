@@ -129,3 +129,38 @@ def test_shot_log_failed_read_stays_zero():
     run.log = lambda lvl, msg, **kw: lines.append(msg)
     run.log_shot(0, 'Rad1')
     assert "gps_seconds: 0," in lines[0]
+
+
+def test_shot_powers_aligned_when_first_shot_is_late():
+    """Timeline: laser_start at t=0, shots at 1.5 s + k s (next second + 500 ms trigger).
+    The radiometer gives one value per shot, a read waits at most READ_TIMEOUT_S.
+    Every shot must get its own power, the first one included."""
+    import math
+    clock = {"t": 0.0}
+    shot_t = [1.5 + k for k in range(5)]
+
+    class Data:
+        def read_shot(self, n, timeout_s):
+            clock["t"] = max(clock["t"], shot_t[n - 1] + 0.001)     # packet right after the shot
+            return Packet(1_735_689_600 + n, 249_994_500, -20, n, "")
+
+    class Rad:
+        taken = 0
+        def read_power(self):
+            k = Rad.taken
+            if k < len(shot_t) and shot_t[k] + 0.05 <= clock["t"] + 0.8:          # READ_TIMEOUT_S
+                clock["t"] = max(clock["t"], shot_t[k] + 0.05)       # value 50 ms after the shot
+                Rad.taken += 1
+                return 100.0 + k
+            clock["t"] += 0.8
+            return math.nan
+
+    dc = FakeDC()
+    dc.data = Data()
+    dc.get_radiometer = lambda name: Rad()
+    run = RunFD(dc, {"identity": "clf", "clf": {}})
+    lines = []
+    run.log = lambda lvl, msg, **kw: lines.append(msg)
+    for i in range(5):
+        run.log_shot(i, 'Rad1')
+    assert [l.split("shot: ")[1].split(",")[0] for l in lines] == ["100.0", "101.0", "102.0", "103.0", "104.0"]

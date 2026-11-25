@@ -80,9 +80,15 @@ class RunBase:
         """Read radiometer power and FPGA timestamp of shot i (0-based) and log them (GPS time).
 
         The packet is matched by its shot number (i+1 in the sequence), not by arrival
-        order: a missing shot gives zeros for that shot only."""
-        power = self.dc.get_radiometer(radiometer).read_power()
+        order: a missing shot gives zeros for that shot only.
+
+        The FPGA packet is read first: it waits for the shot itself (the first one comes
+        up to 1 s + trigger delay after laser_start). The radiometer reading of the shot
+        is then already there or arrives within its READ_TIMEOUT_S, before the next shot.
+        (Reading the radiometer first timed out on shot 0 and shifted every following
+        power by one shot.)"""
         p = self.dc.data.read_shot(i + 1, self.SHOT_TIMEOUT_S)
+        power = self.dc.get_radiometer(radiometer).read_power()
         if p is None:
             seconds, counter, pps, counter_cycles = 0, 0, 0, 0        # 0 = no packet for this shot
         else:
