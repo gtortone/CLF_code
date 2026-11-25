@@ -5,11 +5,13 @@ SERVICE="clf.service"
 PROCESS_NAME="main.py"
 # Exact command line of the process to kill
 PROCESS_CMD="/usr/bin/python3 main.py"
+# Screen session name suffix (sessions are named <pid>.clf)
+SCREEN_NAME="clf"
 # Anchored regex for pgrep -f (dot escaped to match literally)
 PROCESS_REGEX='^/usr/bin/python3 main\.py$'
 
 usage() {
-    echo "Usage: $(basename "$0") {start|stop|status|kill}" >&2
+    echo "Usage: $(basename "$0") {start|stop|status|screen|kill}" >&2
     echo "Run '$(basename "$0")' without arguments for detailed help." >&2
     exit 1
 }
@@ -35,6 +37,9 @@ Commands:
   status    Show the output of 'systemctl status $SERVICE'
             followed by the service state (active/stopped).
 
+  screen    Attach to the detached screen session <pid>.$SCREEN_NAME.
+            Detach again with Ctrl-a d (the service keeps running).
+
   kill      Kill the process "$PROCESS_CMD" with SIGKILL (kill -9).
             NOTE: $SERVICE will restart $PROCESS_NAME shortly
             afterwards. To keep it stopped, run '$name stop'.
@@ -46,6 +51,7 @@ Examples:
   $name start
   $name stop
   $name status
+  $name screen
   $name kill
 EOF
 }
@@ -98,13 +104,40 @@ case "$1" in
         ;;
     status)
         # systemctl status exits 3 when the unit is not running: not an error here
-        systemctl status --no-pager "$SERVICE" >/dev/null
+        systemctl status --no-pager "$SERVICE"
         rc=$?
         echo
         print_state
         # Exit codes 0 (running) and 3 (not running) are both valid answers
         [ $rc -eq 0 ] || [ $rc -eq 3 ] || exit $rc
         exit 0
+        ;;
+    screen)
+        if ! command -v screen >/dev/null 2>&1; then
+            echo "screen command not found" >&2
+            exit 1
+        fi
+        # Collect "<pid>.clf <state>" for every matching session
+        sessions=$(screen -ls 2>/dev/null | awk -v n="$SCREEN_NAME" \
+            '$1 ~ ("^[0-9]+\\." n "$") { gsub(/[()]/, "", $NF); print $1, $NF }')
+        if [ -z "$sessions" ]; then
+            echo "No screen session <pid>.$SCREEN_NAME found" >&2
+            echo "(screen sessions are per user: if $SERVICE runs as another user, run clf as that user)" >&2
+            exit 1
+        fi
+        detached=$(echo "$sessions" | awk '$2 == "Detached" { print $1 }')
+        if [ -z "$detached" ]; then
+            echo "Screen session already attached elsewhere:" >&2
+            echo "$sessions" >&2
+            exit 1
+        fi
+        if [ "$(echo "$detached" | wc -l)" -gt 1 ]; then
+            echo "More than one detached session found:" >&2
+            echo "$detached" >&2
+            exit 1
+        fi
+        echo "Attaching to screen session $detached (detach with Ctrl-a d)"
+        exec screen -r "$detached"
         ;;
     kill)
         pids=$(pgrep -f "$PROCESS_REGEX")
