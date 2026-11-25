@@ -81,9 +81,22 @@ class RunBase:
         """Read radiometer power and FPGA timestamp of shot i (0-based) and log them (GPS time).
 
         The packet is matched by its shot number (i+1 in the sequence), not by arrival
-        order: a missing shot gives zeros for that shot only."""
-        power = self.dc.get_radiometer(radiometer).read_power()
+        order: a missing shot gives zeros for that shot only.
+
+        Radiometer readings are taken by time, not by count:
+        - before the shot, whatever the radiometer already sent is dropped (logged): it
+          belongs to an earlier shot (late reading, or the last shot of the previous run
+          left in the port, which the flush at start did not always remove);
+        - the FPGA packet is read next: it waits for the shot itself (the first one comes
+          up to 1 s + trigger delay after laser_start);
+        - then the reading of this shot, already there or within READ_TIMEOUT_S (< 1 s,
+          before the next shot). No reading: NaN for this shot only.
+        (The old order, radiometer first with a 0.8 s wait, lost a shot at the start
+        and shifted every following power by one shot.)"""
+        rad = self.dc.get_radiometer(radiometer)
+        rad.discard_pending()
         p = self.dc.data.read_shot(i + 1, self.SHOT_TIMEOUT_S)
+        power = rad.read_power()
         if p is None:
             seconds, counter, pps, counter_cycles = 0, 0, 0, 0        # 0 = no packet for this shot
         else:

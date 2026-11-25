@@ -75,6 +75,9 @@ class FakeRadiometer:
     def flush_buffers(self):
         pass
 
+    def discard_pending(self):
+        return []
+
     def read_power(self):
         return 1.0
 
