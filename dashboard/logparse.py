@@ -232,7 +232,7 @@ def parse_runs(log_dir, t_from=None):
         runs.append(_summarise(cur))
     for r in runs:
         r["status"] = ("killed" if r["killed"] else "error" if r["errors"]
-                       else "no shots" if r["type"] in ("FD", "TANK", "CALIB") and not r["n_shots"]
+                       else "no shots" if r["type"] in ("FD", "TANK", "CALIB", "WARMUP") and not r["n_shots"]
                        else "ok")
     return runs, refusals, kills
 

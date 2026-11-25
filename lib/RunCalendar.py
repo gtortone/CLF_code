@@ -23,6 +23,10 @@ class RunEntry:
 
 class RunCalendar:
 
+    # laser warm-up run this long before the first run of the night (CLF: before the
+    # first Raman); parameters.yml <site>: warmup_before_min, 0 = no warm-up run
+    WARMUP_BEFORE_MIN = 30
+
     def __init__(self, file_path, params):
         self.file_path = file_path
         self.params = params
@@ -104,6 +108,12 @@ class RunCalendar:
             sorted_ttable = sorted(ttable, key=lambda x: x.start_time)
 
             if sorted_ttable:       # empty when run_list selects no run type
+                before = self.params[self.identity].get('warmup_before_min', self.WARMUP_BEFORE_MIN)
+                if before:
+                    sorted_ttable.insert(0, RunEntry(sorted_ttable[0].start_time - timedelta(minutes=before),
+                                                     runtype=RunType.WARMUP))
+                for run in sorted_ttable:
+                    run.first = False           # (the first Raman is created as first)
                 sorted_ttable[0].first = True
                 sorted_ttable[-1].last = True
 
