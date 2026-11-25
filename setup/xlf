@@ -1,0 +1,162 @@
+#!/usr/bin/env bash
+# xlf - control script for xlf.service
+
+SERVICE="xlf.service"
+PROCESS_NAME="main.py"
+# Exact command line of the process to kill
+PROCESS_CMD="/usr/bin/python3 main.py"
+# Screen session name suffix (sessions are named <pid>.xlf)
+SCREEN_NAME="xlf"
+# Anchored regex for pgrep -f (dot escaped to match literally)
+PROCESS_REGEX='^/usr/bin/python3 main\.py$'
+
+usage() {
+    echo "Usage: $(basename "$0") {start|stop|status|screen|kill}" >&2
+    echo "Run '$(basename "$0")' without arguments for detailed help." >&2
+    exit 1
+}
+
+# Verbose help, shown when no argument is given or with -h/--help
+show_help() {
+    local name
+    name=$(basename "$0")
+    cat <<EOF
+$name - control script for $SERVICE
+
+Usage:
+  $name <command>
+
+Commands:
+  start     Start $SERVICE (systemctl start $SERVICE).
+            Prints OK/FAIL and the resulting service state.
+
+  stop      Stop $SERVICE (systemctl stop $SERVICE).
+            Prints OK/FAIL and the resulting service state.
+            Use this if you want $PROCESS_NAME to stay down.
+
+  status    Show the output of 'systemctl status $SERVICE'
+            followed by the service state (active/stopped).
+
+  screen    Attach to the detached screen session <pid>.$SCREEN_NAME.
+            Detach again with Ctrl-a d (the service keeps running).
+
+  kill      Kill the process "$PROCESS_CMD" with SIGKILL (kill -9).
+            NOTE: $SERVICE will restart $PROCESS_NAME shortly
+            afterwards. To keep it stopped, run '$name stop'.
+
+  -h, --help
+            Show this help.
+
+Examples:
+  $name start
+  $name stop
+  $name status
+  $name screen
+  $name kill
+EOF
+}
+
+# Print the service state, mapping inactive/failed to "stopped"
+print_state() {
+    local state
+    state=$(systemctl is-active "$SERVICE" 2>/dev/null)
+    case "$state" in
+        inactive|failed) state="stopped" ;;
+    esac
+    echo "Service state: $state"
+}
+
+# Run a systemctl action on the service and report the outcome
+run_systemctl() {
+    local action="$1"
+    local output rc
+
+    output=$(systemctl "$action" "$SERVICE" 2>&1)
+    rc=$?
+
+    if [ $rc -eq 0 ]; then
+        echo "systemctl $action $SERVICE: OK"
+    else
+        echo "systemctl $action $SERVICE: FAIL (exit code $rc)" >&2
+        [ -n "$output" ] && echo "$output" >&2
+    fi
+
+    print_state
+
+    return $rc
+}
+
+if [ $# -eq 0 ]; then
+    show_help
+    exit 1
+fi
+
+[ $# -eq 1 ] || usage
+
+case "$1" in
+    -h|--help)
+        show_help
+        exit 0
+        ;;
+    start|stop)
+        run_systemctl "$1"
+        exit $?
+        ;;
+    status)
+        # systemctl status exits 3 when the unit is not running: not an error here
+        systemctl status --no-pager "$SERVICE"
+        rc=$?
+        echo
+        print_state
+        # Exit codes 0 (running) and 3 (not running) are both valid answers
+        [ $rc -eq 0 ] || [ $rc -eq 3 ] || exit $rc
+        exit 0
+        ;;
+    screen)
+        if ! command -v screen >/dev/null 2>&1; then
+            echo "screen command not found" >&2
+            exit 1
+        fi
+        # Collect "<pid>.xlf <state>" for every matching session
+        sessions=$(screen -ls 2>/dev/null | awk -v n="$SCREEN_NAME" \
+            '$1 ~ ("^[0-9]+\\." n "$") { gsub(/[()]/, "", $NF); print $1, $NF }')
+        if [ -z "$sessions" ]; then
+            echo "No screen session <pid>.$SCREEN_NAME found" >&2
+            echo "(screen sessions are per user: if $SERVICE runs as another user, run xlf as that user)" >&2
+            exit 1
+        fi
+        detached=$(echo "$sessions" | awk '$2 == "Detached" { print $1 }')
+        if [ -z "$detached" ]; then
+            echo "Screen session already attached elsewhere:" >&2
+            echo "$sessions" >&2
+            exit 1
+        fi
+        if [ "$(echo "$detached" | wc -l)" -gt 1 ]; then
+            echo "More than one detached session found:" >&2
+            echo "$detached" >&2
+            exit 1
+        fi
+        echo "Attaching to screen session $detached (detach with Ctrl-a d)"
+        exec screen -r "$detached"
+        ;;
+    kill)
+        pids=$(pgrep -f "$PROCESS_REGEX")
+        if [ -z "$pids" ]; then
+            echo "No \"$PROCESS_CMD\" process found" >&2
+            exit 1
+        fi
+        echo "Killing \"$PROCESS_CMD\" (PID: $pids)"
+        if kill -9 $pids; then
+            echo "kill: OK"
+        else
+            echo "kill: FAIL" >&2
+            exit 1
+        fi
+        echo
+        echo "WARNING: $SERVICE will restart $PROCESS_NAME shortly."
+        echo "         If you do not want it to restart, run: $(basename "$0") stop"
+        ;;
+    *)
+        usage
+        ;;
+esac

@@ -1,0 +1,1 @@
+SUBSYSTEM=="tty", SUBSYSTEMS=="usb", ATTRS{idVendor}=="067b", ATTRS{idProduct}=="2303", ATTRS{manufacturer}=="Prolific Technology Inc.", ENV{ID_USB_INTERFACE_NUM}=="01", SYMLINK+="weather", GROUP="dialout", MODE="0660"

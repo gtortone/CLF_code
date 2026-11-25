@@ -4,7 +4,7 @@
   channel: 6
   value: 0
   unit: V
-  coeff: 0.0051309796
+  coeff: 0.011608448
   scalar: 0
   min: 11.5
   max: 16
@@ -15,7 +15,7 @@
   channel: 2
   value: 0
   unit: V
-  coeff: 0.00518116
+  coeff: 0.011639478
   scalar: 0
   min: 11.5
   max: 16
@@ -26,7 +26,7 @@
   channel: 0
   value: 0
   unit: V
-  coeff: 0.00473095
+  coeff: 0.010827111
   scalar: 0
 
 - dev: tla
@@ -42,7 +42,7 @@
   channel: 4
   value: 0
   unit: V
-  coeff: 0.00495
+  coeff: 0.010961867
   scalar: 0
 
 - dev: tla
