@@ -7,6 +7,7 @@ from lib.GpsTime import unix_to_gps, gps_to_unix, gps_utc_offset
 from lib import TimeSync
 from lib.Run import RunFD
 from lib.FPGAData import Packet
+from lib.Radiometer import Radiometer3700
 
 from fakes import FakeDC
 
@@ -131,14 +132,14 @@ def test_shot_log_failed_read_stays_zero():
     assert "gps_seconds: 0," in lines[0]
 
 
-def _timeline_powers(stale, missed=()):
+def _timeline_powers(stale, missed=(), latency=0.05):
     """laser_start at t=0, shots at 1.5 s + k s (next second + 500 ms trigger); the radiometer
-    sends the reading of shot k 50 ms after it (not for the shots in `missed`), and a read
+    sends the reading of shot k `latency` s after it (not for the shots in `missed`), and a read
     waits at most READ_TIMEOUT_S. `stale`: reading left in the port by the previous run."""
     import math
     clock = {"t": 0.0}
     shot_t = [1.5 + k for k in range(5)]
-    pending = ([(-60.0, stale)] if stale is not None else []) +               [(shot_t[k] + 0.05, 100.0 + k) for k in range(5) if k not in missed]
+    pending = ([(-60.0, stale)] if stale is not None else []) +               [(shot_t[k] + latency, 100.0 + k) for k in range(5) if k not in missed]
 
     class Data:
         def read_shot(self, n, timeout_s):
@@ -152,11 +153,11 @@ def _timeline_powers(stale, missed=()):
             return dropped
 
         def read_power(self):
-            if pending and pending[0][0] <= clock["t"] + 0.8:          # READ_TIMEOUT_S
+            if pending and pending[0][0] <= clock["t"] + Radiometer3700.READ_TIMEOUT_S:
                 t, v = pending.pop(0)
                 clock["t"] = max(clock["t"], t)
                 return v
-            clock["t"] += 0.8
+            clock["t"] += Radiometer3700.READ_TIMEOUT_S
             return math.nan
 
     dc = FakeDC()
@@ -180,3 +181,10 @@ def test_reading_left_by_previous_run_is_not_taken():
     # shifted by one. Now the old reading is dropped, a missing reading is NaN for its shot only
     assert _timeline_powers(stale=999.0) == ["100.0", "101.0", "102.0", "103.0", "104.0"]
     assert _timeline_powers(stale=999.0, missed=(0,)) == ["nan", "101.0", "102.0", "103.0", "104.0"]
+
+
+@pytest.mark.parametrize("latency", [0.05, 0.5, 0.85, 0.9])
+def test_late_readings_stay_with_their_shot(latency):
+    # the radiometer sends every reading (checked on the console), but it can reach the PC
+    # late: with the old 0.8 s wait a reading 0.85 s after the shot gave nan + shift
+    assert _timeline_powers(stale=999.0, latency=latency) == ["100.0", "101.0", "102.0", "103.0", "104.0"]

@@ -136,3 +136,9 @@ def test_discard_pending_nothing_pending_is_silent(clock):
     r = make(Radiometer3700, clock, [(1.55, b"1.000\r")])
     assert r.discard_pending() == []
     assert r.messages == []
+
+
+def test_slow_reading_is_logged(clock):
+    r = make(Radiometer3700, clock, [(0.7, b"1.000\r")])
+    assert r.read_power() == 1.000
+    assert any("slow reading, 0.70s" in m for m in r.messages)

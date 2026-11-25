@@ -58,9 +58,12 @@ class Radiometer:
             return func(self, *args, **kwargs) 
         return wrapper
     
-    # wait for one triggered value at most this long: less than the shot period (1 s),
-    # so that a missing value can never be taken from the next shot
-    READ_TIMEOUT_S = 0.8
+    # wait for one triggered value at most this long. read_power() is called right after
+    # the FPGA packet of the shot (Run.log_shot), so the wait must stay below the shot
+    # period (1 s): the next shot's value can never be taken. Readings can arrive late
+    # (radiometer + MOXA NPort buffering): those slower than SLOW_READING_S are logged.
+    READ_TIMEOUT_S = 0.95
+    SLOW_READING_S = 0.5
 
     def _parse_value(self, line):
         """Measured value in a line of the triggered output, None if the line is not a value."""
@@ -72,7 +75,8 @@ class Radiometer:
         if not self.ready:
             self.log(logging.ERROR, f"RADM_MON_{self.model}: not ready (setup not done)")
             return math.nan
-        deadline = _now() + self.READ_TIMEOUT_S
+        start = _now()
+        deadline = start + self.READ_TIMEOUT_S
         saved_timeout = self.serial.timeout
         try:
             while True:
@@ -89,6 +93,9 @@ class Radiometer:
                     continue
                 value = self._parse_value(line)
                 if value is not None:
+                    waited = _now() - start
+                    if waited > self.SLOW_READING_S:
+                        self.log(logging.WARNING, f"RADM_MON_{self.model}: slow reading, {waited:.2f}s after the shot")
                     return value
                 self.log(logging.WARNING, f"RADM_MON_{self.model}: skipped unexpected line {line!r}")
         except serial.SerialException as e:
