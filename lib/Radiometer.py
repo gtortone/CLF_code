@@ -98,6 +98,24 @@ class Radiometer:
             self.serial.timeout = saved_timeout
 
     @check_open
+    def discard_pending(self):
+        """Read and drop what is already received (called just before a shot): a reading
+        there now belongs to an earlier shot (e.g. the last one of the previous run, that
+        the port flush at the start did not remove) and must not be taken for this shot.
+        The dropped lines are logged. Returns them."""
+        try:
+            data = getattr(self, '_rx', b"") + self.serial.read_all()
+        except serial.SerialException as e:
+            self.log(logging.ERROR, f"RADM_MON_{self.model}: read error: {e}")
+            return []
+        self._rx = b""
+        lines = [l.strip() for l in data.decode(errors='replace').split("\r") if l.strip()]
+        if lines:
+            self.log(logging.WARNING, f"RADM_MON_{self.model}: dropped {len(lines)} reading(s) received "
+                                      f"before the shot: {lines}")
+        return lines
+
+    @check_open
     def flush_buffers(self):
         self._rx = b""                  # partial line kept by read_power()
         try:

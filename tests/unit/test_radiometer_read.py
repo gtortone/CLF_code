@@ -40,6 +40,12 @@ class Serial:
     def reset_output_buffer(self):
         pass
 
+    def read_all(self):
+        """Everything arrived so far, without waiting."""
+        now = [d for t, d in self.items if t <= self.clock.t]
+        self.items = [(t, d) for t, d in self.items if t > self.clock.t]
+        return b"".join(now)
+
 
 @pytest.fixture
 def clock(monkeypatch):
@@ -108,3 +114,25 @@ def test_flush_drops_stale_reading_and_partial_line(clock):
     r.flush_buffers()
     r.serial.items = [(0.2, b"1.0\r")]
     assert r.read_power() == 1.0
+
+
+def test_discard_pending_drops_readings_already_received(clock):
+    # last reading of the previous run still in the port; this shot's value comes later
+    r = make(Radiometer3700, clock, [(-60.0, b"9.990\r"), (1.55, b"1.000\r")])
+    assert r.discard_pending() == ["9.990"]
+    assert any("dropped 1 reading" in m for m in r.messages)
+    clock.t = 1.5                               # shot
+    assert r.read_power() == 1.000
+
+
+def test_discard_pending_also_drops_a_partial_line(clock):
+    r = make(Radiometer3700, clock, [])
+    r._rx = b"1.2"                              # kept by a read_power() timed out mid-line
+    assert r.discard_pending() == ["1.2"]
+    assert r._rx == b""
+
+
+def test_discard_pending_nothing_pending_is_silent(clock):
+    r = make(Radiometer3700, clock, [(1.55, b"1.000\r")])
+    assert r.discard_pending() == []
+    assert r.messages == []

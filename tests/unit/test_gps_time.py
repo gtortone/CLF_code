@@ -131,13 +131,14 @@ def test_shot_log_failed_read_stays_zero():
     assert "gps_seconds: 0," in lines[0]
 
 
-def test_shot_powers_aligned_when_first_shot_is_late():
-    """Timeline: laser_start at t=0, shots at 1.5 s + k s (next second + 500 ms trigger).
-    The radiometer gives one value per shot, a read waits at most READ_TIMEOUT_S.
-    Every shot must get its own power, the first one included."""
+def _timeline_powers(stale, missed=()):
+    """laser_start at t=0, shots at 1.5 s + k s (next second + 500 ms trigger); the radiometer
+    sends the reading of shot k 50 ms after it (not for the shots in `missed`), and a read
+    waits at most READ_TIMEOUT_S. `stale`: reading left in the port by the previous run."""
     import math
     clock = {"t": 0.0}
     shot_t = [1.5 + k for k in range(5)]
+    pending = ([(-60.0, stale)] if stale is not None else []) +               [(shot_t[k] + 0.05, 100.0 + k) for k in range(5) if k not in missed]
 
     class Data:
         def read_shot(self, n, timeout_s):
@@ -145,22 +146,37 @@ def test_shot_powers_aligned_when_first_shot_is_late():
             return Packet(1_735_689_600 + n, 249_994_500, -20, n, "")
 
     class Rad:
-        taken = 0
+        def discard_pending(self):
+            dropped = [v for t, v in pending if t <= clock["t"]]
+            pending[:] = [(t, v) for t, v in pending if t > clock["t"]]
+            return dropped
+
         def read_power(self):
-            k = Rad.taken
-            if k < len(shot_t) and shot_t[k] + 0.05 <= clock["t"] + 0.8:          # READ_TIMEOUT_S
-                clock["t"] = max(clock["t"], shot_t[k] + 0.05)       # value 50 ms after the shot
-                Rad.taken += 1
-                return 100.0 + k
+            if pending and pending[0][0] <= clock["t"] + 0.8:          # READ_TIMEOUT_S
+                t, v = pending.pop(0)
+                clock["t"] = max(clock["t"], t)
+                return v
             clock["t"] += 0.8
             return math.nan
 
     dc = FakeDC()
     dc.data = Data()
-    dc.get_radiometer = lambda name: Rad()
+    rad = Rad()
+    dc.get_radiometer = lambda name: rad
     run = RunFD(dc, {"identity": "clf", "clf": {}})
     lines = []
     run.log = lambda lvl, msg, **kw: lines.append(msg)
     for i in range(5):
         run.log_shot(i, 'Rad1')
-    assert [l.split("shot: ")[1].split(",")[0] for l in lines] == ["100.0", "101.0", "102.0", "103.0", "104.0"]
+    return [l.split("shot: ")[1].split(",")[0] for l in lines]
+
+
+def test_shot_powers_aligned_when_first_shot_is_late():
+    assert _timeline_powers(stale=None) == ["100.0", "101.0", "102.0", "103.0", "104.0"]
+
+
+def test_reading_left_by_previous_run_is_not_taken():
+    # seen at the site: first shot = last reading of the previous run, second lost, then
+    # shifted by one. Now the old reading is dropped, a missing reading is NaN for its shot only
+    assert _timeline_powers(stale=999.0) == ["100.0", "101.0", "102.0", "103.0", "104.0"]
+    assert _timeline_powers(stale=999.0, missed=(0,)) == ["nan", "101.0", "102.0", "103.0", "104.0"]
