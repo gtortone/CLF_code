@@ -40,7 +40,7 @@ GOOD_PCT_MIN = 95.0         # FD/TANK run with fewer valid timestamps: problem
 LOG_GAP_S = 1800            # logs ending this long before the end of the night: problem
 MAX_LINES = 8               # per list in the message
 TELEGRAM_MAX = 4000         # Telegram limit is 4096 characters
-RUN_TYPES = ("FD", "TANK", "RAMAN", "CALIB")
+RUN_TYPES = ("WARMUP", "FD", "TANK", "RAMAN", "CALIB")
 GPS_BAD_MIN_S = 300         # GPS without fix / in holdover longer than this in the night: problem
 HK_SAMPLE_MAX_S = 60        # an hk sample (every ~11 s) counts at most this long (gaps: program down)
 

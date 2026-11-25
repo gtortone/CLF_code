@@ -157,6 +157,7 @@ class RunManager:
         RunType.TANK: RunTank,
         RunType.CALIB: RunCalib,
         RunType.MOCK: RunMock,
+        RunType.WARMUP: RunWarmup,
     }
 
     def submit(self, runentry, source):

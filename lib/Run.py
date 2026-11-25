@@ -19,6 +19,7 @@ class RunType(Enum):
     CALIB = 4,
     MOCK = 5,
     SHUTDOWN = 6,
+    WARMUP = 7,
 
 class RunBase:
 
@@ -241,6 +242,116 @@ class RunShutdown(RunBase):
 
     def abort(self):
         self.run()
+
+class RunWarmup(RunBase):
+    """Laser warm-up at the start of the night, WARMUP_BEFORE_MIN before the first run.
+
+    Everything is powered and the laser brought to fire authorization as for an FD run,
+    left so for HOLD_S, then NSHOTS test shots (1 Hz, logged as the other runs) and the
+    laser back to standby. Covers and flipper are not touched (shots go on the closed
+    cover). Nothing is switched off: the first run of the night follows (finish only
+    with 'start warmup --finish')."""
+
+    NSHOTS = 20
+    HOLD_S = 5 * 60
+
+    def __init__(self, dc : DeviceCollection, params):
+        super().__init__(dc, params)
+        self.nshots = self.NSHOTS
+
+    def prepare(self):
+        self.log(logging.INFO, "prepare")
+        self.sync_time()
+        self.log(logging.INFO, "configure FPGA registers for warm-up shots")
+        self.dc.fpga.write_bit('laser_en', 0)
+        self.dc.fpga.write_bit('timestamp_en', 0)
+        self.configure_shots(self.trigger_delay('fd'), 1.0, self.nshots)     # 1 Hz, FD timing
+        for n in range(5):
+            self.dc.fpga.write_register(f'mux_bnc_{n}', 0b0010)
+        self.log(logging.INFO, "done")
+
+        self.log(logging.INFO, "turn on inverter")
+        if self.dc.fpga.read_dio('inverter') == True:
+            self.log(logging.INFO, "already on - skip")
+        else:
+            self.dc.fpga.write_dio('inverter', True)
+            self.log(logging.INFO, "wait RPC and MOXA power up")
+            time.sleep(10)
+        self.log(logging.INFO, "done")
+
+        for outlet in ('radiometer', 'laser', 'VXM'):
+            self.log(logging.INFO, f"turn on {outlet} outlet")
+            if self.dc.get_outlet(outlet).status() == True:
+                self.log(logging.INFO, "already on - skip")
+            else:
+                WAIT_UNTIL_TRUE(self.dc.get_outlet(outlet).on)
+            self.log(logging.INFO, "done")
+
+        self.log(logging.INFO, "wait power up")
+        time.sleep(10)
+        self.log(logging.INFO, "done")
+
+        self.log(logging.INFO, "radiometer 3700 setup")
+        self.dc.get_radiometer('Rad1').setup()
+        self.log(logging.INFO, "done")
+
+        self.log(logging.INFO, "laser setup")
+        self.dc.laser.set_mode(qson = 1, dpw = 140)
+        self.log(logging.INFO, "done")
+
+        self.log(logging.INFO, "laser warmup and wait for laser fire auth")
+        self.dc.laser.warmup()
+        if not self.wait_laser_ready():
+            return -1
+        self.log(logging.INFO, "done")
+
+        self.dc.fpga.write_bit('timestamp_en', 1)
+        return 0
+
+    def run(self):
+        self.log(logging.INFO, f"hold laser warm for {self.HOLD_S // 60} min")
+        for t in range(self.HOLD_S):
+            if t % 60 == 0:
+                self.log(logging.INFO, self.dc.laser.temperature())
+            time.sleep(1)
+        self.log(logging.INFO, "done")
+
+        self.log(logging.INFO, "set laser in fire mode...")
+        if self.dc.laser.fire() != 0:
+            self.log(logging.ERROR, "laser refused fire mode (see device.log) - no test shots")
+            self.dc.laser.standby()
+            return
+        self.log(logging.INFO, "done")
+
+        self.log(logging.INFO, f"start warm-up shots ({self.nshots}, covers closed)")
+        self.dc.fpga.write_dio('laser_en', 1)
+        self.start_shots('Rad1')         # flush stale timestamps and readings, then laser_start
+        for i in range(self.nshots):
+            self.log_shot(i, 'Rad1')
+        self.dc.fpga.write_dio('laser_en', 0)
+
+        self.log(logging.INFO, "set laser standby")
+        self.dc.laser.standby()
+        self.log(logging.INFO, "done")
+
+    def finish(self):
+        self.log(logging.INFO, "finish")
+        for outlet in ('radiometer', 'laser', 'VXM'):
+            self.log(logging.INFO, f"turn off {outlet} outlet")
+            WAIT_UNTIL_TRUE(self.dc.get_outlet(outlet).off)
+            self.log(logging.INFO, "done")
+        self.log(logging.INFO, "turn off inverter")
+        self.dc.fpga.write_dio('inverter', False)
+        self.log(logging.INFO, "done")
+
+    def abort(self):
+        self.log(logging.INFO, "abort")
+        self.dc.fpga.write_dio('laser_en', 0)
+        self.log(logging.INFO, "set laser standby")
+        self.dc.laser.standby()
+        self.log(logging.INFO, "done")
+        self.finish()
+
 
 class RunRaman(RunBase):
 

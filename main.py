@@ -114,7 +114,8 @@ class App(cmd2.Cmd):
         str.lower(RunType.FD.name),
         str.lower(RunType.TANK.name),
         str.lower(RunType.CALIB.name),
-        str.lower(RunType.MOCK.name)])
+        str.lower(RunType.MOCK.name),
+        str.lower(RunType.WARMUP.name)])
     start_parser.add_argument('-f', '--finish', action='store_true',
         help="at the end of the run switch everything off (as the last run of the night); "
              "default: leave the instruments on for the next tests")

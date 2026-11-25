@@ -18,6 +18,7 @@ clf:
   tank_trigger_ms: 499.99411
   start_minutes: [5, 20, 35, 50]
   tank_name: celeste
+  warmup_before_min: 30       # laser warm-up run before the first run of the night (0 = none)
 
 xlf:
   hw_version: 1
@@ -26,3 +27,4 @@ xlf:
   tank_trigger_ms: 699.99411
   start_minutes: [5, 20, 35, 50]
   tank_name: ramiro
+  warmup_before_min: 30
