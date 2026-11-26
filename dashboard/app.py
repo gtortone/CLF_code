@@ -4,17 +4,23 @@ CLF/XLF shift dashboard: read-only web view of the logs.
 
     python3 dashboard/app.py [--logs DIR] [--port 8080] [--host 0.0.0.0]
 
-The time range ("last N days") ends at the most recent data in the logs.
+Two tabs: "Shift" (few clear answers for the night shifter, shift.py) and "Details"
+(all the plots). Time range: one observation night (default: the latest one, 12:00 UTC
+to 12:00 UTC as in the morning report; ?night=YYYY-MM-DD for another one) or the last
+N days up to the most recent data in the logs (?days=N, 0 = all).
 """
 
 import argparse
 import collections
 import os
 import statistics
+import time
 
 from flask import Flask, abort, jsonify, render_template, request
 
 import logparse as lp
+import shift
+nr = shift.nr
 
 ROOT = lp.ROOT
 app = Flask(__name__)
@@ -34,14 +40,32 @@ def _runs(t_from=None):
     return _runs_memo["value"]
 
 
-def _site():
+def _params():
     try:
-        import yaml
-        with open(os.path.join(ROOT, "conf", "parameters.yml")) as f:
-            params = {k: v for doc in yaml.safe_load_all(f) for k, v in doc.items()}
-        return str(params.get("identity", "")).upper()
+        return nr.load_yaml(os.path.join(ROOT, "conf", "parameters.yml"))
     except (OSError, ValueError, AttributeError):
-        return ""
+        return {}
+
+
+def _site():
+    return str(_params().get("identity", "")).upper()
+
+
+def _window():
+    """(t_from, t_to, night) of the request: ?night=YYYY-MM-DD, ?days=N, default the
+    latest night. For days: up to the most recent data in the logs (0 = all)."""
+    log_dir = app.config["LOG_DIR"]
+    latest = lp.latest_time(log_dir)
+    days = request.args.get("days", type=float)
+    if days is None:
+        night = request.args.get("night") or lp.night_of(latest or time.time())
+        try:
+            t_from, t_to = nr.night_window(night)
+        except ValueError:
+            abort(400)
+        return t_from, t_to, night
+    t_from = 0.0 if days <= 0 else latest - days * 86400
+    return t_from, latest, None
 
 
 def _without_shots(run):
@@ -94,9 +118,7 @@ def index():
 @app.route("/api/data")
 def data():
     log_dir = app.config["LOG_DIR"]
-    days = request.args.get("days", default=3, type=float)
-    t_to = lp.latest_time(log_dir)
-    t_from = 0.0 if days <= 0 else t_to - days * 86400
+    t_from, t_to, night = _window()
     runs_all, refusals_all, kills_all = _runs(t_from or None)
     runs = [r for r in runs_all if t_from <= r["start"] <= t_to]
     refusals = [f for f in refusals_all if t_from <= f["t"] <= t_to]
@@ -116,6 +138,7 @@ def data():
     }
     return jsonify({
         "t_from": t_from if t_from else (runs_all[0]["start"] if runs_all else 0), "t_to": t_to,
+        "night": night, "latest_night": lp.night_of(lp.latest_time(log_dir) or time.time()),
         "summary": summary,
         "nights": _nights(runs, refusals),
         "runs": [_without_shots(r) for r in runs],
@@ -125,6 +148,29 @@ def data():
         "hk": lp.parse_hk(log_dir, t_from or t_to - 365 * 86400, t_to),
         "events": events,
     })
+
+
+@app.route("/api/shift")
+def shift_data():
+    """The answers of the Shift tab for the range (see shift.py)."""
+    log_dir = app.config["LOG_DIR"]
+    t_from, t_to, night = _window()
+    runs_all, refusals_all, _ = _runs(t_from or None)
+    runs = [dict(r) for r in runs_all if t_from <= r["start"] <= t_to]     # copies: checks add keys
+    refusals = [f for f in refusals_all if t_from <= f["t"] <= t_to]
+    exp_from = t_from or (runs_all[0]["start"] if runs_all else t_to)     # "all": from the first run
+    try:
+        expected = nr.expected_runs(_params(), exp_from, t_to) if _params() else []
+    except Exception:                       # no calendar / parameters: only what ran
+        expected = []
+    hk_from = t_from or t_to - 365 * 86400
+    timeref = nr.time_ref_summary(lp.hk_rows(log_dir, hk_from, t_to))
+    out = shift.summary(expected, runs, refusals, timeref, lp.latest_time(log_dir), time.time(),
+                        t_from, t_to)
+    out.update({"t_from": t_from or exp_from, "t_to": t_to, "night": night,
+                "latest_night": lp.night_of(lp.latest_time(log_dir) or time.time()),
+                "hk": shift.power_hk(lp.parse_hk(log_dir, hk_from, t_to))})
+    return jsonify(out)
 
 
 @app.route("/api/run/<run_id>")
