@@ -18,12 +18,8 @@ import logging
 import urllib.error
 import urllib.request
 
-log = logging.getLogger("device")
-
-
 class RPCError(IOError):
     """The RPC_Auger did not answer or answered something unexpected."""
-
 
 class RPCAugerDevice:
 
@@ -33,6 +29,16 @@ class RPCAugerDevice:
         token = base64.b64encode(f"{user}:{password}".encode()).decode()
         self.headers = {"Authorization": f"Basic {token}"}
         self.outlets = {}
+
+        self.logger = logging.getLogger("device")
+        self.logger.setLevel(logging.INFO)
+        if not self.logger.handlers:
+            formatter = logging.Formatter('%(asctime)s - %(classname)s::%(funcName)s - %(levelname)s - %(message)s')
+            handler = TimedRotatingFileHandler('logs/device.log', when='midnight',
+                atTime=datetime.time(hour=18, minute=0))
+            handler.setFormatter(formatter)
+            self.logger.addHandler(handler)
+        self.log = partial(self.logger.log, extra={'classname': self.__class__.__name__})
 
     def _get(self, path):
         req = urllib.request.Request(self.url + path, headers=self.headers)

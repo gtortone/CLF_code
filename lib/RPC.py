@@ -19,6 +19,16 @@ class RPCDevice:
 
         self.serial.port = port
 
+        self.logger = logging.getLogger("device")
+        self.logger.setLevel(logging.INFO)
+        if not self.logger.handlers:
+            formatter = logging.Formatter('%(asctime)s - %(classname)s::%(funcName)s - %(levelname)s - %(message)s')
+            handler = TimedRotatingFileHandler('logs/device.log', when='midnight',
+                atTime=datetime.time(hour=18, minute=0))
+            handler.setFormatter(formatter)
+            self.logger.addHandler(handler)
+        self.log = partial(self.logger.log, extra={'classname': self.__class__.__name__})
+
     def open(self):
         try:
             self.serial.open()
