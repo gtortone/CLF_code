@@ -10,6 +10,14 @@ RADIOMETER_WAIT = 2
 
 _now = time.monotonic      # module level, so that tests can replace the clock
 
+
+def read_powers(radiometers):
+    """The triggered value of the same shot from each radiometer, read one after the other
+    with ONE common deadline (READ_TIMEOUT_S after the call, i.e. after the FPGA packet):
+    a radiometer that does not answer cannot push the next one past the next shot."""
+    start = _now()
+    return [r.read_power(start=start) for r in radiometers]
+
 class Radiometer:
 
     model: str = "unknown"
@@ -70,20 +78,27 @@ class Radiometer:
         raise NotImplementedError
 
     @check_open
-    def read_power(self):
-        """Value of the next triggered measurement (10^-3 J); NaN on any error."""
+    def read_power(self, start=None):
+        """Value of the next triggered measurement (10^-3 J); NaN on any error.
+        `start` (module clock _now()): when the wait began, to read several radiometers of
+        the same shot one after the other within one common deadline (read_powers)."""
         if not self.ready:
             self.log(logging.ERROR, f"RADM_MON_{self.model}: not ready (setup not done)")
             return math.nan
-        start = _now()
+        start = _now() if start is None else start
         deadline = start + self.READ_TIMEOUT_S
         saved_timeout = self.serial.timeout
+        last_look = False
         try:
             while True:
                 remaining = deadline - _now()
                 if remaining <= 0:
-                    self.log(logging.ERROR, f"RADM_MON_{self.model}: no value within {self.READ_TIMEOUT_S}s")
-                    return math.nan
+                    if last_look:
+                        self.log(logging.ERROR, f"RADM_MON_{self.model}: no value within {self.READ_TIMEOUT_S}s")
+                        return math.nan
+                    # deadline already used by another radiometer: still take a value
+                    # that is already received (non-blocking read)
+                    last_look, remaining = True, 0
                 self.serial.timeout = remaining
                 self._rx = getattr(self, '_rx', b"") + self.serial.read_until(b"\r")
                 if not self._rx.endswith(b"\r"):
