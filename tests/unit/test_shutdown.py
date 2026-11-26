@@ -80,7 +80,7 @@ class FakeProcess:
 def make_rm(monkeypatch):
     monkeypatch.setattr(rm_module.multiprocessing, "Process", FakeProcess)
 
-    def make(inverter=True, next_in_min=None, auto=True):
+    def make(inverter=True, next_in_min=None, auto=True, next_first=False):
         rm = RunManager.__new__(RunManager)
         rm.dc = station(CLF_OUTLETS, inverter)
         rm.params = {"identity": "clf", "clf": {}}
@@ -92,7 +92,8 @@ def make_rm(monkeypatch):
         rm.log = lambda level, msg, **kw: rm.messages.append(msg)
         nr = None
         if next_in_min is not None:
-            nr = RunEntry(datetime.datetime.now() + datetime.timedelta(minutes=next_in_min), RunType.FD)
+            nr = RunEntry(datetime.datetime.now() + datetime.timedelta(minutes=next_in_min), RunType.FD,
+                          first=next_first)
         rm.nr = nr
         return rm
     return make
@@ -102,16 +103,46 @@ def shutdown_started(rm):
     return rm.runentry is not None and rm.runentry.runtype == RunType.SHUTDOWN and rm.job.is_alive()
 
 
-@pytest.mark.parametrize("next_in_min,expected", [
-    (None, True),       # no run left in the calendar
-    (60, True),         # next run tomorrow / far away
-    (44, False),        # still within the night (e.g. Raman end+30 -> calib end+60)
-    (14, False),        # between FD runs
+@pytest.mark.parametrize("next_in_min,next_first,expected", [
+    (None, False, True),    # no run left in the calendar
+    (600, True, True),      # night over: the next run is the first of the next night
+    (44, True, False),      # next night starts soon: keep on
+    (14, False, False),     # between FD runs
+    (90, False, False),     # long gap in the same night (XLF: last FD -> calib): never shut down
+    (300, False, False),    # however long, while runs of this night are still to come
 ])
-def test_idle_rule(make_rm, next_in_min, expected):
-    rm = make_rm(next_in_min=next_in_min)
+def test_idle_rule(make_rm, next_in_min, next_first, expected):
+    rm = make_rm(next_in_min=next_in_min, next_first=next_first)
     rm.idle_check(rm.nr)
     assert shutdown_started(rm) is expected
+
+
+def test_idle_with_the_real_calendar_of_a_night(make_rm):
+    """Every gap of a real XLF and CLF night (calendar + warm-up) keeps the instruments on;
+    after the last run (calibration) the next run is the first of another night."""
+    from lib.RunCalendar import RunCalendar
+    import os
+    root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    for site, run_list in (("xlf", ["fd", "tank", "calib"]), ("clf", ["fd", "tank", "raman", "calib"])):
+        params = {"identity": site, site: {"run_list": run_list, "start_minutes": [5, 20, 35, 50],
+                                           "fd_trigger_ms": 250, "tank_trigger_ms": 500}}
+        rc = RunCalendar(os.path.join(root, "docs", "ALLFDCalendar.txt"), params)
+        nights = [rc.get_timetable_for_entry(e) for e in rc.run_entries[:40]]
+        nights = [n for n in nights if n][:2]
+        tonight, tomorrow = nights
+        gaps = [(b.start_time - a.start_time).total_seconds() / 60 for a, b in zip(tonight, tonight[1:])]
+        if site == "xlf":                           # no Raman: last FD -> calib is ~1 h,
+            assert max(gaps) > 45                   # longer than the idle time (the bug)
+        assert all(not r.first for r in tonight[1:]) and tomorrow[0].first
+        for nxt in tonight[1:]:                     # waiting for any run of the same night
+            rm = make_rm()
+            rm.idle_check(nxt)
+            assert not shutdown_started(rm), (site, nxt)
+        rm = make_rm()                              # after the last one: night over
+        import dataclasses                          # (calendar nights are in the past: move it)
+        rm.idle_check(dataclasses.replace(tomorrow[0], start_time=datetime.datetime.now()
+                                          + datetime.timedelta(hours=12)))
+        assert shutdown_started(rm)
 
 
 def test_idle_not_in_manual_mode(make_rm):
