@@ -28,7 +28,7 @@ from lib.GpsTime import gps_to_unix, unix_to_gps                                
 
 NOMINALS = [d + PULSE_ENERGY for d in KNOWN_PPS_DELAYS]
 
-LINE_RE = re.compile(r"^(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d),(\d{3}) - (\w+)::(\w+) - (\w+) - (.*)$")
+LINE_RE = re.compile(r"^(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d),(\d{3}) - (\w+)::([\w<>]+) - (\w+) - (.*)$")
 HK_RE = re.compile(r"^(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d),(\d{3}) - housekeeping - (\w+) - (.*)$")
 HK_FIELD_RE = re.compile(r"(\w+)=([^\[\s]*)\[([^\]]*)\]")
 SHOT_RE = re.compile(r"^power (\d+) shot:\s*(\S*), (gps_seconds|seconds): (\d+), counter: ([-\d.eE+]+), "
@@ -224,7 +224,7 @@ def parse_runs(log_dir, t_from=None):
         elif msg == "done" and pending_step:
             cur[pending_step[0]] = t - pending_step[1]
             pending_step = None
-        if func == "run":
+        if func in ("run", "<listcomp>"):     # <listcomp>: warm-up shots logged on Python < 3.12
             s = _shot(msg, t)
             if s:
                 cur["_shots"].append(s)

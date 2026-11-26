@@ -400,7 +400,9 @@ class RunWarmup(RunBase):
             self.series = f"batch{batch}"
             self.dc.fpga.write_dio('laser_en', 1)
             self.start_shots('Rad1')         # flush stale timestamps and readings, then laser_start
-            powers = [self.log_shot(i, 'Rad1') for i in range(self.nshots)]
+            powers = []
+            for i in range(self.nshots):        # a plain loop: in a list comprehension the log
+                powers.append(self.log_shot(i, 'Rad1'))     # names '<listcomp>' on Python < 3.12
             self.dc.fpga.write_dio('laser_en', 0)
             stable, text = self.energy_stable(powers, previous)
             self.log(logging.INFO, f"batch {batch}: {text} -> {'stable' if stable else 'not stable yet'}")
