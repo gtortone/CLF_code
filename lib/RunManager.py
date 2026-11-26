@@ -97,15 +97,19 @@ class RunManager:
                 self.log(logging.ERROR, f"idle shutdown check failed: {e!r}", exc_info=True)
             time.sleep(1)
 
-    # no run within this time and instruments still powered (inverter on): shut down.
-    # Longer than the gaps of a night (FD every 15 min, Raman end+30, calib end+60).
+    # night over (the next scheduled run is the first of another night, or none) and no
+    # run within this time, instruments still powered (inverter on): shut down.
     IDLE_SHUTDOWN_S = 45 * 60
     IDLE_CHECK_PERIOD_S = 60
 
     def idle_check(self, nr):
-        """Auto mode only: shut the station down when nothing is running, the inverter is
-        on and the next run is more than IDLE_SHUTDOWN_S away (or there is none), e.g.
-        when the last run of the night did not start (alarm, manual mode, busy).
+        """Auto mode only: shut the station down at the end of the night when the last
+        run did not do it (it did not start: alarm, manual mode, busy): nothing is running,
+        the inverter is on and the next run is the first of another night (or there is
+        none) and more than IDLE_SHUTDOWN_S away.
+
+        Never while runs of the same night are still to come, however long the gap (e.g.
+        last FD -> calibration at XLF): a shutdown there leaves the laser cold for them.
 
         Only instruments left on by the scheduler are switched off: what was powered by
         hand (manual mode, tests, main.py just started) is never touched."""
@@ -114,11 +118,14 @@ class RunManager:
                 or self.job_is_running() or now < getattr(self, '_next_idle_check', 0)):
             return
         self._next_idle_check = now + self.IDLE_CHECK_PERIOD_S
+        if nr is not None and not nr.first:
+            return              # more runs of this night to come: keep the instruments on
         if nr is not None and (nr.start_time - datetime.datetime.now()).total_seconds() <= self.IDLE_SHUTDOWN_S:
             return
         if self.dc.fpga.read_dio('inverter'):
-            self.start_shutdown(f"no run in the next {self.IDLE_SHUTDOWN_S // 60} min"
-                                + ("" if nr is None else f" (next: {nr.runtype.name} at {nr.start_time})"))
+            self.start_shutdown("night over, instruments still on"
+                                + (" (no run left in the calendar)" if nr is None
+                                   else f" (next night starts with {nr.runtype.name} at {nr.start_time})"))
 
     def start_shutdown(self, reason):
         """Start a RunShutdown job (not refused on alarms: it is what alarms need)."""
