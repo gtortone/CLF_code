@@ -67,19 +67,76 @@
            border-radius: 6px; cursor: pointer; padding: 2px 8px; font: inherit; }
   .hint { color: var(--muted); font-size: 12px; }
   .loading { color: var(--muted); }
+  /* tabs and range */
+  .tabs { display: flex; gap: 4px; }
+  .tabs button { border: 1px solid var(--border); background: var(--surface); color: var(--ink2);
+                 padding: 6px 14px; border-radius: 6px; cursor: pointer; font: inherit; font-weight: 600; }
+  .tabs button[aria-selected="true"] { color: var(--ink); border-color: var(--ink2); box-shadow: inset 0 -2px 0 var(--ink); }
+  .ranges .night { font-variant-numeric: tabular-nums; }
+  .ranges .sep { width: 8px; }
+  .ranges button:disabled { opacity: .35; cursor: default; }
+  .tab[hidden] { display: none; }
+  /* shift view */
+  .banner { border: 1px solid var(--border); border-left: 6px solid var(--muted); border-radius: 8px;
+            background: var(--surface); padding: 12px 16px; margin-bottom: 12px; }
+  .banner .head { font-size: 20px; font-weight: 700; }
+  .banner ul { margin: 8px 0 0; padding-left: 4px; list-style: none; }
+  .banner li { margin: 2px 0; }
+  .lvl-ok { border-left-color: var(--good); }
+  .lvl-warn { border-left-color: var(--warning); }
+  .lvl-bad { border-left-color: var(--critical); }
+  .st { white-space: nowrap; }
+  .st::before { display: inline-block; width: 1.2em; }
+  .st-ok::before { content: "✔"; color: var(--good); }
+  .st-warn::before { content: "▲"; color: var(--warning); }
+  .st-bad::before { content: "✖"; color: var(--critical); }
+  .st-info::before { content: "●"; color: var(--s1); }
+  .st-none::before { content: "○"; color: var(--muted); }
+  .tile .value.st { font-size: 22px; }
+  .tiles.big { grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); }
+  .sched { max-height: 460px; overflow-y: auto; }
+  tr.click { cursor: pointer; }
+  tr.click:hover td { background: var(--page); }
+  td.muted { color: var(--muted); }
 </style>
 </head>
 <body>
 <div class="wrap">
   <header>
     <h1>{{ site or "CLF" }} · shift dashboard</h1>
+    <div class="tabs" role="tablist">
+      <button role="tab" data-tab="shift" aria-selected="true">Shift</button>
+      <button role="tab" data-tab="details" aria-selected="false">Details</button>
+    </div>
     <span class="meta" id="range">—</span>
     <div class="ranges" role="group" aria-label="Time range">
-      <button data-days="1">1 d</button><button data-days="3" aria-pressed="true">3 d</button>
-      <button data-days="7">7 d</button><button data-days="30">30 d</button><button data-days="0">all</button>
+      <button id="night-prev" title="previous night">◀</button>
+      <button id="night" class="night" aria-pressed="true">night</button>
+      <button id="night-next" title="next night">▶</button>
+      <span class="sep"></span>
+      <button data-days="3">3 d</button><button data-days="7">7 d</button>
+      <button data-days="30">30 d</button><button data-days="0">all</button>
     </div>
   </header>
 
+  <section class="tab" id="tab-shift">
+    <div class="banner" id="banner"><span class="loading">loading…</span></div>
+    <div class="tiles big" id="s-tiles"></div>
+
+    <h2>Runs</h2>
+    <p class="hint">Scheduled runs of the range and runs started by hand. Click a run for its shot-by-shot detail.</p>
+    <div class="tablewrap sched"><table id="s-sched"></table></div>
+
+    <h2>Laser energy</h2>
+    <div class="card"><h3>Energy of each run vs the usual</h3>
+      <p class="sub" id="s-energy-sub">median of the run − median of the runs of the same type in the range (%)</p>
+      <div class="plot" id="s-energy"></div></div>
+
+    <h2>Power</h2>
+    <div class="grid2" id="s-power"></div>
+  </section>
+
+  <section class="tab" id="tab-details" hidden>
   <div class="tiles" id="tiles"><span class="loading">loading…</span></div>
 
   <section id="detail" class="card" style="margin-top:16px">
@@ -117,24 +174,30 @@
   <h2>Events</h2>
   <p class="hint" id="refusals"></p>
   <div class="tablewrap events"><table id="events"></table></div>
+  </section>
 </div>
 
 <script>
-const TYPES = ["FD", "TANK", "CALIB", "RAMAN", "MOCK"];       // fixed order = fixed color
-const theme = new URLSearchParams(location.search).get("theme");      // ?theme=light|dark overrides the OS
+const TYPES = ["FD", "TANK", "CALIB", "RAMAN", "WARMUP", "MOCK"];       // fixed order = fixed color
+const urlp = new URLSearchParams(location.search);
+const theme = urlp.get("theme");      // ?theme=light|dark overrides the OS
 if (theme === "light" || theme === "dark") document.documentElement.dataset.theme = theme;
 const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
 const typeColor = t => css("--s" + (TYPES.indexOf(t) + 1));
 const iso = t => new Date(t * 1000).toISOString().slice(0, 19).replace("T", " ");
 const fmt = (v, d = 1) => v === null || v === undefined || Number.isNaN(v) ? "—" : Number(v).toFixed(d);
-let current = null, days = Number(new URLSearchParams(location.search).get("days") ?? 3);
+let current = null, currentShift = null;
+let tab = urlp.get("tab") === "details" ? "details" : "shift";
+// range: one night (default: the latest one) or the last N days
+let range = {days: urlp.has("days") ? Number(urlp.get("days")) : null, night: urlp.get("night")};
+let shown = {night: null, latest: null};
 
 function layout(ytitle, extra = {}) {
   const ink2 = css("--ink2"), grid = css("--grid"), axis = css("--axis");
   return Object.assign({
-    margin: {l: 56, r: 12, t: 8, b: 36}, paper_bgcolor: "rgba(0,0,0,0)", plot_bgcolor: "rgba(0,0,0,0)",
+    margin: {l: 56, r: 12, t: 8, b: 52}, paper_bgcolor: "rgba(0,0,0,0)", plot_bgcolor: "rgba(0,0,0,0)",
     font: {family: "system-ui, -apple-system, Segoe UI, sans-serif", size: 12, color: ink2},
-    xaxis: {type: "date", gridcolor: grid, linecolor: axis, zeroline: false, title: {text: "UTC"}},
+    xaxis: {type: "date", gridcolor: grid, linecolor: axis, zeroline: false, title: {text: "UTC", standoff: 22}},
     yaxis: {title: {text: ytitle}, gridcolor: grid, linecolor: axis, zerolinecolor: axis},
     legend: {orientation: "h", y: 1.12, x: 0}, hovermode: "closest",
     hoverlabel: {bgcolor: css("--surface"), bordercolor: css("--axis"), font: {color: css("--ink")}},
@@ -219,8 +282,8 @@ function hkGroups(hk) {
   return groups;
 }
 
-function plotHk(hk) {
-  const box = document.getElementById("hk");
+function plotHk(hk, boxId = "hk") {
+  const box = document.getElementById(boxId);
   box.innerHTML = "";
   hkGroups(hk).forEach((g, gi) => {
     const card = document.createElement("div");
@@ -257,9 +320,101 @@ function eventsTable(events, refusals) {
       `<td>${e.source}</td><td class=msg>${e.msg.replace(/</g, "&lt;")}</td></tr>`).join("");
 }
 
+// ------------------------------------------------------------------ Shift tab
+
+// state of a scheduled run -> [level, label]; level: ok, warn, bad, info, none (icon + text, never color alone)
+const STATE = {
+  done: ["ok", "done"], problem: ["warn", "done, to check"], missing: ["bad", "not started"],
+  refused: ["warn", "not started"], running: ["info", "running"], waiting: ["none", "due, not started yet"],
+  scheduled: ["none", "scheduled"], manual: ["info", "started by hand"],
+};
+const esc = t => String(t).replace(/&/g, "&amp;").replace(/</g, "&lt;");
+const hhmm = t => iso(t).slice(11, 16);
+const sign = (v, d = 1) => v === null || v === undefined ? "—" : (v >= 0 ? "+" : "") + Number(v).toFixed(d);
+
+function tile(label, value, level, note) {
+  return `<div class="tile"><div class="label">${label}</div><div class="value st st-${level}">${value}</div>` +
+         `<div class="note">${note}</div></div>`;
+}
+
+function renderShift(d) {
+  currentShift = d;
+  const n = d.problems.length;
+  const head = d.level === "ok" ? "All OK" : d.level === "warn" ? `${n} thing${n > 1 ? "s" : ""} to check`
+             : `${n} problem${n > 1 ? "s" : ""}`;
+  const banner = document.getElementById("banner");
+  banner.className = `banner lvl-${d.level}`;
+  banner.innerHTML = `<div class="head st st-${d.level}">${head}</div>` + (n
+    ? "<ul>" + d.problems.map(p => `<li class="st st-${p.level}">${esc(p.text)}</li>`).join("") + "</ul>"
+    : `<div class="hint">Runs started as scheduled, shots on time, laser energy stable, GPS ok.</div>`);
+
+  const r = d.runs, tm = d.timing, en = d.energy, g = d.gps;
+  const types = Object.entries(r.by_type).map(([t, c]) => `${t} ${c.started}/${c.expected}`).join(" · ");
+  const later = r.expected - r.expected_so_far;
+  const runNote = (types || "no runs scheduled") + (later > 0 ? ` · ${later} still to come` : "") +
+                  (r.manual ? ` · ${r.manual} started by hand` : "");
+  const runLevel = !r.expected ? "none" : r.missing ? "bad" : r.refused ? "warn" : "ok";
+  const gpsNote = !g ? "no housekeeping data" :
+    `fix ${fmt(g.good_pct)} % of the time` + (g.lock_lost === 0 ? " · FPGA clock locked"
+      : g.lock_lost ? ` · FPGA clock lost lock ${g.lock_lost}×` : "");
+  document.getElementById("s-tiles").innerHTML = [
+    tile("Runs started", r.expected ? `${r.started} / ${r.expected_so_far}` : "—", runLevel, runNote),
+    tile("Shots on time", tm.runs ? `${tm.ok} / ${tm.runs} runs` : "—", !tm.runs ? "none" : tm.ok === tm.runs ? "ok" : "warn",
+         `≥ ${tm.good_pct_min} % valid timestamps, within ±${tm.dev_max_ns} ns`),
+    tile("Laser energy stable", en.runs ? `${en.ok} / ${en.runs} runs` : "—", !en.runs ? "none" : en.ok === en.runs ? "ok" : "warn",
+         en.runs ? `spread ${fmt(en.spread_pct)} % · limit ±${en.dev_max_pct} % (FD, TANK)` : "no FD/TANK run"),
+    tile("GPS", !g ? "—" : g.ok ? "OK" : "check", !g ? "none" : g.ok ? "ok" : "bad", gpsNote),
+  ].join("");
+
+  const multi = !d.night;
+  const cell = (ok, text) => ok === null || ok === undefined ? `<td class=muted>—</td>`
+    : `<td class="st st-${ok ? "ok" : "warn"}">${text}</td>`;
+  document.getElementById("s-sched").innerHTML =
+    "<tr><th>UTC</th><th>Run</th><th>State</th><th class=num>Shots</th><th>Shots on time</th><th>Energy vs usual</th></tr>" +
+    d.schedule.map(x => {
+      const [lvl, label] = STATE[x.state];
+      const when = multi ? iso(x.t).slice(5, 16) : hhmm(x.t);
+      const late = x.start && x.planned && Math.abs(x.start - x.t) > 90 ? ` (started ${hhmm(x.start)})` : "";
+      let stateText = label + (x.why ? `: ${esc(x.why)}` : "");
+      if (x.status && x.status !== "ok" && x.state !== "running") stateText += ` (${x.status})`;
+      return `<tr${x.id ? ` class=click data-id="${esc(x.id)}"` : ""}><td>${when}${late}</td><td>${x.type}</td>` +
+        `<td class="st st-${lvl}">${stateText}</td><td class=num>${x.n_shots ?? "—"}</td>` +
+        cell(x.timing_ok, x.timing_ok ? "ok" : `${fmt(x.good_pct, 0)} % valid, ${sign(x.timing_dev_ns, 0)} ns`) +
+        cell(x.energy_ok, `${sign(x.energy_dev_pct)} %`) + "</tr>";
+    }).join("");
+  document.querySelectorAll("#s-sched tr.click").forEach(tr => tr.addEventListener("click", () => openRun(tr.dataset.id)));
+
+  const lim = en.dev_max_pct;
+  const pts = d.energy_points;
+  const traces = TYPES.filter(t => pts.some(p => p.type === t)).map(t => {
+    const ps = pts.filter(p => p.type === t);
+    return {type: "scatter", mode: "markers", name: t, x: ps.map(p => iso(p.t)), y: ps.map(p => p.dev),
+            customdata: ps.map(p => p.id),
+            marker: {size: 9, color: typeColor(t), symbol: ps.map(p => p.ok ? "circle" : "triangle-up"),
+                     line: {width: 1, color: css("--surface")}},
+            hovertemplate: `${t} %{x|%H:%M}: %{y:+.1f} %<extra></extra>`};
+  });
+  const top = Math.max(lim * 1.6, ...pts.map(p => Math.abs(p.dev))) * 1.1;
+  const lay = layout("% vs usual", {
+    yaxis: {title: {text: "% vs usual"}, gridcolor: css("--grid"), zerolinecolor: css("--axis"), range: [-top, top]},
+    shapes: [{type: "rect", xref: "paper", x0: 0, x1: 1, y0: -lim, y1: lim, fillcolor: css("--good"),
+              opacity: 0.08, line: {width: 0}, layer: "below"}],
+    annotations: [{xref: "paper", x: 1, y: lim, yanchor: "bottom", xanchor: "right", showarrow: false,
+                   text: `±${lim} %`, font: {size: 11, color: css("--muted")}}]});
+  const el = document.getElementById("s-energy");
+  draw(el, traces, lay, "no FD/TANK run with energy in the range");
+  el.removeAllListeners && el.removeAllListeners("plotly_click");
+  el.on("plotly_click", ev => openRun(ev.points[0].customdata));
+
+  plotHk(d.hk, "s-power");
+  if (!Object.keys(d.hk).length)
+    document.getElementById("s-power").innerHTML = `<p class="hint">no battery / solar panel data in the range</p>`;
+}
+
+// ------------------------------------------------------------------ Details tab
+
 function render(d) {
   current = d;
-  document.getElementById("range").textContent = `data ${iso(d.t_from)} → ${iso(d.t_to)} UTC`;
   tiles(d);
   nightsTable(d.nights);
   const runs = d.runs;
@@ -294,14 +449,46 @@ function render(d) {
   requestAnimationFrame(() => document.querySelectorAll(".plot").forEach(p => p.data && Plotly.Plots.resize(p)));
 }
 
+// ------------------------------------------------------------------ tabs, range, loading
+
+const dayShift = (night, n) => new Date(Date.parse(night + "T00:00:00Z") + n * 86400e3).toISOString().slice(0, 10);
+
+function query() {
+  return range.days !== null ? `days=${range.days}` : range.night ? `night=${range.night}` : "";
+}
+
+function showRange(d) {
+  shown = {night: d.night, latest: d.latest_night};
+  document.getElementById("range").textContent = (d.night ? `night ${d.night}: ` : "") +
+    `${iso(d.t_from)} → ${iso(d.t_to)} UTC`;
+  const nightBtn = document.getElementById("night");
+  nightBtn.textContent = d.night ? (d.night === d.latest_night ? `last night (${d.night})` : `night ${d.night}`) : "last night";
+  nightBtn.setAttribute("aria-pressed", range.days === null);
+  document.querySelectorAll(".ranges button[data-days]").forEach(b =>
+    b.setAttribute("aria-pressed", range.days !== null && Number(b.dataset.days) === range.days));
+  document.getElementById("night-next").disabled = !d.night || d.night >= d.latest_night;
+}
+
 async function load() {
-  document.querySelectorAll(".ranges button").forEach(b => b.setAttribute("aria-pressed", b.dataset.days == days));
-  history.replaceState(null, "", `?days=${days}` + (theme ? `&theme=${theme}` : ""));
-  const res = await fetch(`api/data?days=${days}`);
-  render(await res.json());
+  const q = query();
+  history.replaceState(null, "", "?" + [tab === "details" ? "tab=details" : "", q, theme ? `theme=${theme}` : ""]
+    .filter(Boolean).join("&"));
+  const d = await (await fetch((tab === "shift" ? "api/shift" : "api/data") + (q ? "?" + q : ""))).json();
+  showRange(d);
+  if (tab === "shift") renderShift(d); else render(d);
+  requestAnimationFrame(() => document.querySelectorAll(`#tab-${tab} .plot`).forEach(p => p.data && Plotly.Plots.resize(p)));
+}
+
+function setTab(t) {
+  tab = t;
+  document.querySelectorAll(".tabs button").forEach(b => b.setAttribute("aria-selected", b.dataset.tab === t));
+  document.getElementById("tab-shift").hidden = t !== "shift";
+  document.getElementById("tab-details").hidden = t !== "details";
+  return load();
 }
 
 async function openRun(id) {
+  if (tab !== "details") await setTab("details");
   const r = await (await fetch(`api/run/${encodeURIComponent(id)}`)).json();
   const box = document.getElementById("detail");
   box.classList.add("open");
@@ -329,11 +516,20 @@ async function openRun(id) {
   box.scrollIntoView({behavior: "smooth", block: "start"});
 }
 
-document.querySelectorAll(".ranges button").forEach(b => b.addEventListener("click", () => { days = Number(b.dataset.days); load(); }));
+document.querySelectorAll(".ranges button[data-days]").forEach(b => b.addEventListener("click", () => {
+  range = {days: Number(b.dataset.days), night: null}; load(); }));
+document.getElementById("night").addEventListener("click", () => { range = {days: null, night: null}; load(); });
+document.getElementById("night-prev").addEventListener("click", () => {
+  range = {days: null, night: dayShift(shown.night || shown.latest, -1)}; load(); });
+document.getElementById("night-next").addEventListener("click", () => {
+  const n = dayShift(shown.night, 1);
+  range = {days: null, night: n >= shown.latest ? null : n}; load(); });
+document.querySelectorAll(".tabs button").forEach(b => b.addEventListener("click", () => setTab(b.dataset.tab)));
 document.getElementById("detail-close").addEventListener("click", () => document.getElementById("detail").classList.remove("open"));
-window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => current && render(current));
-const initialRun = new URLSearchParams(location.search).get("run");   // ?run=<id>: link to one run
-load().then(() => { if (initialRun) openRun(initialRun); });
+window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
+  if (tab === "shift" && currentShift) renderShift(currentShift); else if (current) render(current); });
+const initialRun = urlp.get("run");   // ?run=<id>: link to one run
+setTab(tab).then(() => { if (initialRun) openRun(initialRun); });
 </script>
 </body>
 </html>
