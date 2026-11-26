@@ -10,10 +10,12 @@ import shift                                                   # noqa: E402
 T = 1_764_000_000.0          # some night
 
 
-def run(typ, start, status="ok", n_shots=50, good=100.0, t_gps_ms=250.0, power=1.0e-3):
+def run(typ, start, status="ok", n_shots=50, good=100.0, t_gps_ms=250.0, power=1.0e-3,
+        no_packet=0, other=0, no_energy=0):
     return {"id": f"{typ}-{int(start)}", "type": typ, "start": start, "end": start + 120, "status": status,
             "errors": ["boom"] if status == "error" else [], "n_shots": n_shots, "good_pct": good,
-            "t_gps_ms": t_gps_ms, "power_median": power}
+            "t_gps_ms": t_gps_ms, "power_median": power, "n_packet": n_shots - no_packet,
+            "n_stale": 0, "n_wrong": other, "n_power_bad": no_energy}
 
 
 def states(rows):
@@ -49,17 +51,41 @@ def test_waiting_then_missing():
 
 def test_timing_and_energy_checks():
     runs = shift.run_checks([run("FD", T), run("FD", T + 900, t_gps_ms=250.0005),     # +500 ns
-                             run("FD", T + 1800, good=80.0), run("FD", T + 2700, power=1.1e-3),
+                             run("FD", T + 1800, good=80.0, no_packet=10), run("FD", T + 2700, power=1.1e-3),
                              run("FD", T + 3600)])
     assert [r["timing_ok"] for r in runs] == [True, False, False, True, True]
+    assert [r["shot_problem"] for r in runs] == [None, "out of time", "bad timestamps", None, None]
     assert runs[1]["timing_dev_ns"] == pytest_approx(500)
     assert [r["energy_ok"] for r in runs] == [True, True, True, False, True]
-    assert runs[3]["energy_dev_pct"] == pytest_approx(10.0)
+    assert runs[3]["energy_dev_pct"] == pytest_approx(10.0) and runs[3]["energy_problem"] == "off"
+
+
+def test_shot_problems_told_apart():
+    runs = shift.run_checks([
+        run("FD", T, status="no shots", n_shots=0, good=None, t_gps_ms=None, power=None),
+        run("FD", T + 900, good=0.0, t_gps_ms=None, power=None, no_packet=50, no_energy=50),  # nothing came
+        run("FD", T + 1800, good=0.0, t_gps_ms=None, no_packet=50),       # energy yes, timestamps no
+        run("FD", T + 2700, good=4.0, no_packet=1, other=47),             # timestamps of another shot
+        run("FD", T + 3600, no_energy=10),                                # radiometer readings missing
+        run("FD", T + 4500), run("FD", T + 5400)])
+    assert [r["shot_problem"] for r in runs] == ["not fired", "not fired", "bad timestamps", "bad timestamps",
+                                                 None, None, None]
+    assert runs[1]["shot_detail"] == "50 of 50 shots without energy and timestamp"
+    assert runs[2]["shot_detail"] == "50 without timestamp (of 50 shots)"
+    assert runs[3]["shot_detail"] == "1 without timestamp and 47 with the timestamp of another shot (of 50 shots)"
+    assert [r["energy_problem"] for r in runs] == [None, None, None, None, "missing", None, None]
+    assert runs[0]["energy_ok"] is None and runs[1]["energy_ok"] is None       # not fired: no energy check
+
+
+def test_killed_without_shots_is_only_a_failure():
+    r = shift.run_checks([run("FD", T, status="killed", n_shots=0, good=None, t_gps_ms=None, power=None)])[0]
+    assert r["shot_problem"] is None and r["timing_ok"] is None
 
 
 def test_calib_energy_not_compared():
     runs = shift.run_checks([run("CALIB", T, power=5e-3), run("RAMAN", T + 100, n_shots=0, power=None)])
-    assert runs[0]["energy_ok"] is None and runs[0]["timing_ok"] is True
+    # CALIB (Rad3): readings checked, energy not compared with the FD/TANK usual
+    assert runs[0]["energy_dev_pct"] is None and runs[0]["energy_ok"] is True and runs[0]["timing_ok"] is True
     assert runs[1]["timing_ok"] is None and runs[1]["energy_ok"] is None
 
 
@@ -79,7 +105,8 @@ def test_all_ok():
     s = shift.summary(expected, runs, [], TIMEREF_OK, T + 4000, T + 4000, T - 3600, T + 80000)
     assert s["level"] == "ok" and s["problems"] == []
     assert s["runs"]["started"] == 4 and s["runs"]["expected_so_far"] == 4
-    assert s["timing"] == {"runs": 4, "ok": 4, "good_pct_min": shift.GOOD_PCT_MIN, "dev_max_ns": shift.TIMING_DEV_NS}
+    assert s["shots"]["runs"] == 4 and s["shots"]["bad"] == 0
+    assert s["energy"]["runs"] == 4 and s["energy"]["bad"] == 0
     assert s["gps"]["ok"] and s["gps"]["lock_lost"] == 0
 
 
@@ -96,11 +123,19 @@ def test_problems_and_level():
 
 def test_many_runs_with_the_same_problem_are_one_line():
     expected = [(T + i * 900, "FD") for i in range(10)]
-    runs = [run("FD", t + 1, good=0.0, t_gps_ms=None) for t, _ in expected]
+    runs = [run("FD", t + 1, good=0.0, t_gps_ms=None, no_packet=50) for t, _ in expected]
     s = shift.summary(expected, runs, [], TIMEREF_OK, T + 9500, T + 9500, T - 3600, T + 80000)
     assert s["level"] == "warn"
     assert len(s["problems"]) == 1
-    assert s["problems"][0]["text"].startswith("10 runs with shots not on time: FD ")
+    assert s["problems"][0]["text"].startswith("10 runs with bad timestamps (missing or of another shot): FD ")
+    assert s["shots"]["bad"] == 10 and s["shots"]["kinds"] == {"not fired": 0, "bad timestamps": 10, "out of time": 0}
+
+
+def test_not_fired_is_a_problem_not_a_warning():
+    runs = [run("FD", T + 1, good=0.0, t_gps_ms=None, power=None, no_packet=50, no_energy=50)]
+    s = shift.summary([(T, "FD")], runs, [], TIMEREF_OK, T + 4000, T + 4000, T - 3600, T + 80000)
+    assert s["level"] == "bad"
+    assert s["problems"][0]["text"] == "FD 00:40 not fired: 50 of 50 shots without energy and timestamp"         .replace("00:40", shift.nr.utc(T + 1))
 
 
 def test_logs_stopped_during_the_night():
