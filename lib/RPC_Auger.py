@@ -17,6 +17,7 @@ import json
 import logging
 import urllib.error
 import urllib.request
+from functools import partial
 
 class RPCError(IOError):
     """The RPC_Auger did not answer or answered something unexpected."""
