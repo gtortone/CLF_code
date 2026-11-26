@@ -7,6 +7,16 @@ RPC:
   stopbits: 1
   timeout: 1
 
+# RPC_Auger (custom Auger board, HTTP): to use it, comment out the serial RPC above and uncomment this.
+# Outlet ids in outlets.yml stay the same (id 1 -> OUT1 ... id 6 -> OUT6).
+#RPC:
+#  type: RPC_Auger
+#  ip: "172.32.0.93"
+#  port: 8080
+#  user: admin
+#  password: admin
+#  timeout: 3
+
 Laser:
   port: "/dev/ttyr01"
   baudrate: 57600

@@ -3,6 +3,7 @@ import sys
 import serial
 sys.path.append(os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
 from lib.RPC import RPCDevice
+from lib.RPC_Auger import RPCAugerDevice
 from lib.VXM import VXM
 from lib.Radiometer import Radiometer3700, RadiometerOphir
 from lib.Centurion import Centurion
@@ -32,10 +33,7 @@ class DeviceCollection:
             f"FPGA firmware hw v{fw if fw else '?'} (profile v{self.hw.version}), "
             f"build {build.isoformat(' ') if build else 'unknown'}", extra={'classname': 'DeviceCollection'})
 
-        # outlets
-        for oname, oparams in cfg.outlets.items():
-            port_params = cfg.get_port_params(oparams['port'])
-            self.add_outlet(oparams['id'], oname, **port_params)
+        self.init_outlets(cfg)
 
         # motors
         for mname, mparams in cfg.motors.items():
@@ -49,6 +47,16 @@ class DeviceCollection:
             port_params = cfg.get_port_params(rparams['port'])
             self.add_radiometer(rname, rparams['model'], **port_params)
 
+    def init_outlets(self, cfg):
+        """Outlets on the RPC of their port in ports.yml: `type: RPC_Auger` = custom Auger RPC
+        (HTTP, `ip` + `port`), no type or `type: serial` = old serial RPC."""
+        for oname, oparams in cfg.outlets.items():
+            port_params = dict(cfg.get_port_params(oparams['port']))
+            if str(port_params.pop('type', 'serial')).lower() == 'rpc_auger':
+                self.add_auger_outlet(oparams['id'], oname, oparams['port'], port_params)
+            else:
+                self.add_outlet(oparams['id'], oname, **port_params)
+
     def add_outlet(self, id, name, port, baudrate=115200, bytesize=8, parity='N', stopbits=1, timeout=1):
         if(self.serials.get(port, None) == None):
             params = locals()
@@ -59,6 +67,13 @@ class DeviceCollection:
 
         rpc = self.serials[port]
         self.outlets[name] = rpc.add_outlet(id, name)
+
+    def add_auger_outlet(self, id, name, port_name, port_params):
+        """Outlet on an RPC_Auger: one RPCAugerDevice per port name in ports.yml."""
+        key = f"RPC_Auger:{port_name}"
+        if key not in self.serials:
+            self.serials[key] = RPCAugerDevice(**port_params)
+        self.outlets[name] = self.serials[key].add_outlet(id, name)
 
     def get_outlet(self, name):
         return self.outlets[name]
