@@ -107,3 +107,14 @@ def test_events_keep_only_warnings_and_errors(tmp_path):
         "2026-10-21 18:00:00,000 - VXM::cmd - DEBUG - lots of dialogue\n"
         "2026-10-21 18:00:01,000 - VXM::cmd - WARNING - no answer\n")
     assert [(e[3], e[4]) for e in lp._parse_events_file(str(tmp_path / "device.log"))] == [("WARNING", "no answer")]
+
+
+def test_warmup_shots_logged_from_a_list_comprehension(tmp_path):
+    # CLF (Python < 3.12): the warm-up shots of 2026-11-26 are logged as RunWarmup::<listcomp>
+    lines = ["2026-11-27 00:05:00,000 - RunManager::submit - INFO - start WARMUP run"]
+    for i in range(3):
+        lines.append(f"2026-11-27 00:15:{10 + i:02d},250 - RunWarmup::<listcomp> - INFO - power {i} shot: 0.00045, "
+                     f"gps_seconds: {1478131000 + i}, counter: 249994500, pps distance: -20ns, counter cycle: {i + 1}")
+    (tmp_path / "run.log").write_text("\n".join(lines) + "\n")
+    runs, _, _ = lp.parse_runs(str(tmp_path))
+    assert runs[0]["type"] == "WARMUP" and runs[0]["n_shots"] == 3 and runs[0]["status"] == "ok"
