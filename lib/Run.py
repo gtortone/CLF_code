@@ -1,6 +1,8 @@
 
 import time
 import datetime
+import math
+import statistics
 import logging
 import paramiko
 from functools import partial
@@ -131,6 +133,7 @@ class RunBase:
                                              counter, pps, counter_cycles, powers))
         except Exception as e:          # the CSV is a copy for the analyses: never stop a run
             self.log(logging.ERROR, f"shots.csv not written: {e}")
+        return power
 
     LASER_READY_TIMEOUT_S = 600     # TEC/diodes conditioning in STANDBY until fire authorization
 
@@ -286,18 +289,27 @@ class RunShutdown(RunBase):
 class RunWarmup(RunBase):
     """Laser warm-up at the start of the night, WARMUP_BEFORE_MIN before the first run.
 
-    Everything is powered and the laser brought to fire authorization as for an FD run,
-    left so for HOLD_S, then NSHOTS test shots (1 Hz, logged as the other runs) and the
-    laser back to standby. Covers and flipper are not touched (shots go on the closed
-    cover). Nothing is switched off: the first run of the night follows (finish only
-    with 'start warmup --finish')."""
+    Everything is powered and the laser brought to fire authorization (READY and the site
+    minimum temperatures) as for an FD run. Then batches of BATCH_SHOTS test shots (1 Hz,
+    logged as the other runs, series batch1, batch2, ...) on the closed cover, BATCH_PAUSE_S
+    apart, until the energy is stable and no longer rising (energy_stable), or until the
+    time limit, so that the first run of the night is never delayed. Then the laser back
+    to standby. Covers and flipper are not touched. Nothing is switched off: the first run
+    of the night follows (finish only with 'start warmup --finish')."""
 
-    NSHOTS = 20
-    HOLD_S = 5 * 60
+    BATCH_SHOTS = 10
+    BATCH_PAUSE_S = 60
+    MIN_VALID = 8               # readings per batch, out of BATCH_SHOTS
+    STABLE_CV_PCT = 5.0         # spread within the batch: std / mean
+    PLATEAU_PCT = 3.0           # batch median vs the previous one: no longer rising
+    MAX_MIN = 15                # time limit of the test shots (parameters.yml: warmup_max_min);
+                                # + at most LASER_READY_TIMEOUT_S before: ends before the first run
 
     def __init__(self, dc : DeviceCollection, params):
         super().__init__(dc, params)
-        self.nshots = self.NSHOTS
+        self.nshots = self.BATCH_SHOTS
+        self.max_s = 60 * self.params.get(self.identity, {}).get('warmup_max_min', self.MAX_MIN)
+        self.t_start = None         # start of the test shots
 
     def prepare(self):
         self.log(logging.INFO, "prepare")
@@ -348,14 +360,29 @@ class RunWarmup(RunBase):
         self.dc.fpga.write_bit('timestamp_en', 1)
         return 0
 
-    def run(self):
-        self.log(logging.INFO, f"hold laser warm for {self.HOLD_S // 60} min")
-        for t in range(self.HOLD_S):
-            if t % 60 == 0:
-                self.log(logging.INFO, self.dc.laser.temperature())
-            time.sleep(1)
-        self.log(logging.INFO, "done")
+    @staticmethod
+    def _valid(powers):
+        return [p for p in powers if p is not None and not math.isnan(p) and p > 0]
 
+    def energy_stable(self, powers, previous_median):
+        """(stable, text) for one batch: enough readings, small spread and the median no
+        longer rising vs the previous batch (None for the first batch: never stable)."""
+        valid = self._valid(powers)
+        if len(valid) < self.MIN_VALID:
+            return False, f"{len(valid)}/{len(powers)} readings"
+        med = statistics.median(valid)
+        cv = 100.0 * statistics.pstdev(valid) / statistics.mean(valid)
+        text = f"median {med:.4g}, spread {cv:.1f} %"
+        if previous_median is None:
+            return False, text + " (first batch)"
+        change = 100.0 * (med / previous_median - 1)
+        text += f", {change:+.1f} % vs previous batch"
+        return cv <= self.STABLE_CV_PCT and abs(change) <= self.PLATEAU_PCT, text
+
+    def _time_left(self):
+        return self.max_s - (time.monotonic() - (self.t_start or time.monotonic()))
+
+    def run(self):
         self.log(logging.INFO, "set laser in fire mode...")
         if self.dc.laser.fire() != 0:
             self.log(logging.ERROR, "laser refused fire mode (see device.log) - no test shots")
@@ -363,12 +390,36 @@ class RunWarmup(RunBase):
             return
         self.log(logging.INFO, "done")
 
-        self.log(logging.INFO, f"start warm-up shots ({self.nshots}, covers closed)")
-        self.dc.fpga.write_dio('laser_en', 1)
-        self.start_shots('Rad1')         # flush stale timestamps and readings, then laser_start
-        for i in range(self.nshots):
-            self.log_shot(i, 'Rad1')
-        self.dc.fpga.write_dio('laser_en', 0)
+        self.t_start = time.monotonic()
+        self.log(logging.INFO, f"warm-up shots: batches of {self.nshots} (covers closed) until the energy "
+                               f"is stable (spread <= {self.STABLE_CV_PCT} %, change <= {self.PLATEAU_PCT} %), "
+                               f"at most {self.max_s / 60:.0f} min")
+        previous, batch, stable = None, 0, False
+        while True:
+            batch += 1
+            self.series = f"batch{batch}"
+            self.dc.fpga.write_dio('laser_en', 1)
+            self.start_shots('Rad1')         # flush stale timestamps and readings, then laser_start
+            powers = [self.log_shot(i, 'Rad1') for i in range(self.nshots)]
+            self.dc.fpga.write_dio('laser_en', 0)
+            stable, text = self.energy_stable(powers, previous)
+            self.log(logging.INFO, f"batch {batch}: {text} -> {'stable' if stable else 'not stable yet'}")
+            if stable:
+                break
+            valid = self._valid(powers)
+            if len(valid) >= self.MIN_VALID:
+                previous = statistics.median(valid)
+            # the next batch (pause + shots) must end within the time limit
+            if self._time_left() < self.BATCH_PAUSE_S + self.nshots + 5:
+                break
+            self.log(logging.INFO, f"wait {self.BATCH_PAUSE_S} s")
+            time.sleep(self.BATCH_PAUSE_S)
+
+        if stable:
+            self.log(logging.INFO, f"laser energy stable after {batch} batches")
+        else:
+            self.log(logging.WARNING, f"laser energy not stable within {self.max_s / 60:.0f} min "
+                                      f"({batch} batches): warm-up ended to leave time for the runs")
 
         self.log(logging.INFO, "set laser standby")
         self.dc.laser.standby()
