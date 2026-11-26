@@ -14,10 +14,12 @@ and `port` (see DeviceCollection); without `type` the old serial RPC is used.
 
 import base64
 import json
+import datetime
 import logging
 import urllib.error
 import urllib.request
 from functools import partial
+from logging.handlers import TimedRotatingFileHandler
 
 class RPCError(IOError):
     """The RPC_Auger did not answer or answered something unexpected."""
@@ -57,8 +59,7 @@ class RPCAugerDevice:
         except (KeyError, TypeError):
             raise RPCError(f"RPC {self.url}/status: no 'outputs' in {answer!r}")
         if answer.get("enable", 1) != 1:
-            log.warning(f"RPC {self.url}: outputs not enabled (enable={answer.get('enable')})",
-                        extra={'classname': 'RPC_Auger'})
+            self.log(logging.WARNING, f"RPC {self.url}: outputs not enabled (enable={answer.get('enable')})")
         return {k: bool(v) for k, v in outputs.items()}
 
     def add_outlet(self, id, name):
@@ -89,15 +90,12 @@ class RPCAugerOutlet:
         try:
             answer = self.device._get(f"/output/{self.output}/{cmd}")
             if answer.get(self.output) != cmd:
-                log.error(f"RPC {self.output} ({self.name}) {cmd}: unexpected answer {answer!r}",
-                          extra={'classname': 'RPC_Auger'})
+                self.device.log(logging.ERROR, f"RPC {self.output} ({self.name}) {cmd}: unexpected answer {answer!r}")
             if self.status() == bool(state):
                 return True
-            log.error(f"RPC {self.output} ({self.name}) {cmd}: state not changed",
-                      extra={'classname': 'RPC_Auger'})
+            self.device.log(logging.ERROR, f"RPC {self.output} ({self.name}) {cmd}: state not changed")
         except (RPCError, AttributeError) as e:
-            log.error(f"RPC {self.output} ({self.name}) {cmd} failed: {e}",
-                      extra={'classname': 'RPC_Auger'})
+            self.device.log(logging.ERROR, f"RPC {self.output} ({self.name}) {cmd} failed: {e}")
         return False
 
     def on(self):
