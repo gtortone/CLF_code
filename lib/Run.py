@@ -11,6 +11,7 @@ from lib.Helpers import *
 from lib.Hardware import get_profile, trigger_delay_ticks
 from lib.GpsTime import unix_to_gps
 from lib import TimeSync
+from lib.Radiometer import read_powers
 
 class RunType(Enum):
     RAMAN = 1,
@@ -70,14 +71,15 @@ class RunBase:
 
     SHOT_TIMEOUT_S = 2.5        # 1 Hz sequences: first shot within 1 s + pps delay, then 1 s apart
 
-    def start_shots(self, radiometer):
+    def start_shots(self, *radiometers):
         """Start the FPGA shot sequence, dropping timestamp packets and radiometer
         readings left from before (one triggered reading per shot from here on)."""
         self.dc.data.flush()
-        self.dc.get_radiometer(radiometer).flush_buffers()
+        for name in radiometers:
+            self.dc.get_radiometer(name).flush_buffers()
         self.dc.fpga.write_dio('laser_start', 1)
 
-    def log_shot(self, i, radiometer):
+    def log_shot(self, i, radiometer, also=()):
         """Read radiometer power and FPGA timestamp of shot i (0-based) and log them (GPS time).
 
         The packet is matched by its shot number (i+1 in the sequence), not by arrival
@@ -92,11 +94,21 @@ class RunBase:
         - then the reading of this shot, already there or within READ_TIMEOUT_S (< 1 s,
           before the next shot). No reading: NaN for this shot only.
         (The old order, radiometer first with a 0.8 s wait, lost a shot at the start
-        and shifted every following power by one shot.)"""
+        and shifted every following power by one shot.)
+
+        `also`: other radiometers read for the same shot (e.g. Rad1 next to Rad3 in the
+        calibration run), all within the same READ_TIMEOUT_S; their values are appended
+        to the line as ", power Rad1: <value>" (the main one stays in "shot: <value>")."""
         rad = self.dc.get_radiometer(radiometer)
-        rad.discard_pending()
+        others = [self.dc.get_radiometer(name) for name in also]
+        for r in [rad] + others:
+            r.discard_pending()
         p = self.dc.data.read_shot(i + 1, self.SHOT_TIMEOUT_S)
-        power = rad.read_power()
+        if others:
+            power, *other_powers = read_powers([rad] + others)
+        else:
+            power, other_powers = rad.read_power(), []
+        extra = "".join(f", power {name}: {value}" for name, value in zip(also, other_powers))
         if p is None:
             seconds, counter, pps, counter_cycles = 0, 0, 0, 0        # 0 = no packet for this shot
         else:
@@ -104,7 +116,7 @@ class RunBase:
             seconds, counter, pps, counter_cycles = p.seconds, round(p.counter), round(p.pps_delta), p.shot
         gps_seconds = unix_to_gps(seconds) if seconds else 0
         self.log(logging.INFO, f'power {i} shot: {power}, gps_seconds: {gps_seconds}, counter: {counter}, '
-                               f'pps distance: {pps}ns, counter cycle: {counter_cycles}', stacklevel=2)
+                               f'pps distance: {pps}ns, counter cycle: {counter_cycles}{extra}', stacklevel=2)
 
     LASER_READY_TIMEOUT_S = 600     # TEC/diodes conditioning in STANDBY until fire authorization
 
@@ -946,6 +958,12 @@ class RunCalib(RunBase):
         self.dc.get_radiometer('Rad3').setup()
         self.log(logging.INFO, "done")
 
+        # Rad1 (the radiometer of the FD/TANK runs) is read too: the Rad3/Rad1 ratio
+        # transfers the calibration to the energies measured by Rad1 in the other runs
+        self.log(logging.INFO, "radiometer 3700 setup")
+        self.dc.get_radiometer('Rad1').setup()
+        self.log(logging.INFO, "done")
+
         self.log(logging.INFO, "laser setup")
         self.dc.laser.set_mode(qson = 1, dpw = 140)
         self.log(logging.INFO, "done")
@@ -1003,40 +1021,40 @@ class RunCalib(RunBase):
         self.log(logging.INFO, "run")
         self.log(logging.INFO, f"start Calib Run")
         self.dc.fpga.write_dio('laser_en', 1)
-        self.start_shots('Rad3')         # flush stale timestamps and readings, then laser_start
+        self.start_shots('Rad3', 'Rad1')       # flush stale timestamps and readings, then laser_start
 
         self.log(logging.INFO, "Starting energy calibration measurements...")
         for i in range(self.nshots):
-            self.log_shot(i, 'Rad3')
+            self.log_shot(i, 'Rad3', also=('Rad1',))
 
         self.log(logging.INFO, "move motors to polarization calibration position...")    
         self.dc.get_motor("LwNorthSouth").move_ABS(self.dc.get_motor("LwNorthSouth").pcal_position)  
         time.sleep(1)
         self.dc.get_motor("LwPolarizer").move_ABS(0)        #0 deg
         self.dc.fpga.write_dio('laser_en', 1)
-        self.start_shots('Rad3')         # flush stale timestamps and readings, then laser_start
+        self.start_shots('Rad3', 'Rad1')       # flush stale timestamps and readings, then laser_start
         
         self.log(logging.INFO, "Starting polarization calibration measurements at 0 deg...")
         for i in range(self.nshots):
-            self.log_shot(i, 'Rad3')
+            self.log_shot(i, 'Rad3', also=('Rad1',))
 
         self.log(logging.INFO, "move motors to polarization calibration position...")    
         self.dc.get_motor("LwPolarizer").move_ABS(90*80)    #90 deg
         self.dc.fpga.write_dio('laser_en', 1)
-        self.start_shots('Rad3')         # flush stale timestamps and readings, then laser_start
+        self.start_shots('Rad3', 'Rad1')       # flush stale timestamps and readings, then laser_start
 
         self.log(logging.INFO, "Starting polarization calibration measurements at 90 deg...")
         for i in range(self.nshots):
-            self.log_shot(i, 'Rad3')
+            self.log_shot(i, 'Rad3', also=('Rad1',))
 
         self.log(logging.INFO, "move motors to polarization calibration position...")    
         self.dc.get_motor("LwPolarizer").move_ABS(180*80)    #180 deg
         self.dc.fpga.write_dio('laser_en', 1)
-        self.start_shots('Rad3')         # flush stale timestamps and readings, then laser_start
+        self.start_shots('Rad3', 'Rad1')       # flush stale timestamps and readings, then laser_start
 
         self.log(logging.INFO, "Starting polarization calibration measurements at 180 deg...")
         for i in range(self.nshots):
-            self.log_shot(i, 'Rad3')
+            self.log_shot(i, 'Rad3', also=('Rad1',))
 
 
         self.log(logging.INFO, "set laser standby")

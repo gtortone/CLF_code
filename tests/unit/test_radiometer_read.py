@@ -142,3 +142,29 @@ def test_slow_reading_is_logged(clock):
     r = make(Radiometer3700, clock, [(0.7, b"1.000\r")])
     assert r.read_power() == 1.000
     assert any("slow reading, 0.70s" in m for m in r.messages)
+
+
+# --- two radiometers of the same shot (calibration run: Rad3 + Rad1) ---------------------
+
+def test_read_powers_both_values(clock):
+    rad3 = make(RadiometerOphir, clock, [(0.3, b"*2.0E-3\r")])
+    rad1 = make(Radiometer3700, clock, [(0.5, b"1.000\r")])
+    assert rad_module.read_powers([rad3, rad1]) == [2.0e-3, 1.0]
+
+
+def test_read_powers_one_deadline_for_all(clock):
+    # Rad3 never answers: Rad1's value, already received, is still taken, and the
+    # whole read ends within READ_TIMEOUT_S (before the next shot), not after 2 x
+    rad3 = make(RadiometerOphir, clock, [])
+    rad1 = make(Radiometer3700, clock, [(0.2, b"1.000\r")])
+    p3, p1 = rad_module.read_powers([rad3, rad1])
+    assert math.isnan(p3) and p1 == 1.0
+    assert clock.t == pytest.approx(Radiometer3700.READ_TIMEOUT_S)
+
+
+def test_read_powers_second_missing(clock):
+    rad3 = make(RadiometerOphir, clock, [(0.3, b"*2.0E-3\r")])
+    rad1 = make(Radiometer3700, clock, [(1.2, b"9.000\r")])     # next shot's value: not taken
+    p3, p1 = rad_module.read_powers([rad3, rad1])
+    assert p3 == 2.0e-3 and math.isnan(p1)
+    assert clock.t == pytest.approx(Radiometer3700.READ_TIMEOUT_S)
