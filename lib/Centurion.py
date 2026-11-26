@@ -32,6 +32,9 @@ HB4_NAMES = {0x80: "J1 disconnected", 0x40: "J2 disconnected", 0x20: "remote int
 
 # fire only below these temperatures (1/10 C): the laser has its own limits, these are ours
 FIRE_MAX_TEMPS = (500, 450, 450)        # pump head, dump resistor, interface plate
+# names of the $TEMPS values, in their order; minimum temperatures to fire well are per site
+# (parameters.yml <site>: laser_min_temp_c: {head: 42, dump: 26}): READY alone is too early
+TEMP_NAMES = ("head", "dump", "plate")
 
 _now = time.monotonic   # module level, so that tests can replace the clock
 _sleep = time.sleep
@@ -122,6 +125,8 @@ class Centurion:
         self.serial = None
         self.params = dict(baudrate=baudrate, parity=parity, timeout=timeout)
         self._last_status = None            # last LaserStatus description logged
+        self.min_temps = {}                 # {"head": 420, ...} in 1/10 C, see set_min_temps
+        self._last_waiting = None           # temperatures still below minimum, last logged
 
         # logger first: it is needed to report a failure opening the port
         self.logger = logging.getLogger("device")
@@ -332,12 +337,47 @@ class Centurion:
         st = self.read_full_status()
         return None if st is None else st.state
 
+    def set_min_temps(self, min_temp_c):
+        """Minimum temperatures to fire, {"head": 42.0, "dump": 26.0} in C (None/{}: none).
+        Unknown names raise ValueError (a typo in parameters.yml must not disable a check)."""
+        min_temp_c = min_temp_c or {}
+        unknown = set(min_temp_c) - set(TEMP_NAMES)
+        if unknown:
+            raise ValueError(f"laser_min_temp_c: unknown {sorted(unknown)} (known: {list(TEMP_NAMES)})")
+        self.min_temps = {name: int(round(float(v) * 10)) for name, v in min_temp_c.items()}
+        self._last_waiting = None
+
+    def below_min_temps(self, temps):
+        """[(name, value, minimum)] (1/10 C) of the temperatures still below their minimum."""
+        return [(name, t, self.min_temps[name]) for name, t in zip(TEMP_NAMES, temps)
+                if name in self.min_temps and t < self.min_temps[name]]
+
     def fire_auth(self):
-        """True when the laser can fire: STANDBY, configured, READY (Happy Bytes without
-        NOT-READY / INTERLOCK). The State Byte alone (0x7E) is not enough: it reads 7E
-        also while the laser is NOT-READY, e.g. pump head still too cold or too warm."""
+        """True when the laser can fire well: STANDBY, configured, READY (Happy Bytes
+        without NOT-READY / INTERLOCK) and every temperature at its site minimum.
+
+        The State Byte alone (0x7E) is not enough: it reads 7E also while the laser is
+        NOT-READY. READY alone is not enough either: the laser reports it with the pump head
+        at ~39 C, but fires well only at ~42-44 C (site dependent, set_min_temps)."""
         st = self.read_full_status()
-        return st is not None and st.ready
+        if st is None or not st.ready:
+            return False
+        if not self.min_temps:
+            return True
+        temps = self.temperature()
+        if temps is None:
+            return False
+        below = self.below_min_temps(temps)
+        waiting = tuple(name for name, _, _ in below)
+        if waiting != self._last_waiting:   # logged when what is missing changes, not every poll
+            if below:
+                self.log(logging.INFO, "CENT:READY:READY, waiting for temperature: " + ", ".join(
+                    f"{name} {t / 10:.1f} < {lim / 10:.1f} C" for name, t, lim in below))
+            else:
+                self.log(logging.INFO, "CENT:READY:temperatures reached: " + ", ".join(
+                    f"{name} {t / 10:.1f} C" for name, t in zip(TEMP_NAMES, temps)))
+            self._last_waiting = waiting
+        return not below
 
     def read_bytes(self):
         """Log the full status and the shot counters."""
@@ -404,9 +444,10 @@ class Centurion:
         return -1
 
     def fire(self):
-        """FIRE mode, after a fresh temperature readout within FIRE_MAX_TEMPS.
-        0: $FIRE acknowledged; -1: no temperature readout; -2: temperature out of range;
-        -3: $FIRE not acknowledged."""
+        """FIRE mode, after a fresh temperature readout within FIRE_MAX_TEMPS and at least
+        the site minimum temperatures (set_min_temps).
+        0: $FIRE acknowledged; -1: no temperature readout; -2: temperature above maximum;
+        -3: $FIRE not acknowledged; -4: temperature below the minimum to fire well."""
         temps = self.temperature()      # fresh readout only: never old or default values
         if temps is None:
             self.log(logging.ERROR, "CENT:FIRE:temperature readout failed - not firing")
@@ -415,6 +456,11 @@ class Centurion:
             self.log(logging.ERROR, f"CENT:FIRE:temperature out of range (head {temps[0]}, "
                                     f"dump {temps[1]}, plate {temps[2]}) - not firing")
             return -2
+        below = self.below_min_temps(temps)
+        if below:
+            self.log(logging.ERROR, "CENT:FIRE:temperature below the minimum to fire well (" + ", ".join(
+                f"{name} {t / 10:.1f} < {lim / 10:.1f} C" for name, t, lim in below) + ") - not firing")
+            return -4
         if not self.send_command("$FIRE"):
             self.log(logging.ERROR, "CENT:FIRE:$FIRE not acknowledged - not in fire mode")
             return -3

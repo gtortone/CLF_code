@@ -147,3 +147,80 @@ def test_fire_bit_set(laser):
     laser.ser.answer("$STATUS", "$STATUS BE 00 00 00 00")
     assert laser.fire() == 0
     assert not any(m.startswith("CENT:FIRE") for _, m in laser.messages)
+
+
+# --- minimum temperatures to fire well (READY comes at ~39 C, good shots at ~42-44 C) -------
+
+def test_ready_but_too_cold_waits(laser):
+    laser.set_min_temps({"head": 42, "dump": 26})
+    laser.ser.answer("$STATUS", "$STATUS 7E 00 00 00 00")            # READY
+    laser.ser.answer("$TEMPS", "$TEMPS 390 250 300")                  # head 39.0, dump 25.0
+    assert laser.fire_auth() is False
+    laser.ser.answer("$TEMPS", "$TEMPS 415 262 300")                  # dump ok, head not yet
+    assert laser.fire_auth() is False
+    laser.ser.answer("$TEMPS", "$TEMPS 421 262 300")
+    assert laser.fire_auth() is True
+    msgs = [m for _, m in laser.messages if m.startswith("CENT:READY:")]
+    assert msgs == ["CENT:READY:READY, waiting for temperature: head 39.0 < 42.0 C, dump 25.0 < 26.0 C",
+                    "CENT:READY:READY, waiting for temperature: head 41.5 < 42.0 C",
+                    "CENT:READY:temperatures reached: head 42.1 C, dump 26.2 C, plate 30.0 C"]
+
+
+def test_waiting_logged_only_when_it_changes(laser):
+    laser.set_min_temps({"head": 44})
+    laser.ser.answer("$STATUS", "$STATUS 7E 00 00 00 00")
+    for t in (400, 405, 410, 415):                                    # 1 s polls while warming
+        laser.ser.answer("$TEMPS", f"$TEMPS {t} 250 300")
+        assert laser.fire_auth() is False
+    assert len([m for _, m in laser.messages if m.startswith("CENT:READY:")]) == 1
+
+
+def test_not_ready_never_checks_temperatures(laser):
+    laser.set_min_temps({"head": 42})
+    laser.ser.answer("$STATUS", "$STATUS 7e 03 01 01 00")
+    assert laser.fire_auth() is False
+    assert "$TEMPS ?" not in laser.ser.written
+
+
+def test_no_minimum_configured(laser):
+    laser.ser.answer("$STATUS", "$STATUS 7E 00 00 00 00")
+    assert laser.fire_auth() is True
+    assert "$TEMPS ?" not in laser.ser.written                         # as before
+
+
+def test_temperature_readout_failure_is_not_ready(laser):
+    laser.set_min_temps({"head": 42})
+    laser.ser.answer("$STATUS", "$STATUS 7E 00 00 00 00")
+    assert laser.fire_auth() is False                                  # no $TEMPS answer
+
+
+def test_fire_refused_below_minimum(laser):
+    laser.set_min_temps({"head": 44, "dump": 26})
+    laser.ser.answer("$TEMPS", "$TEMPS 430 270 300")
+    laser.ser.answer("$FIRE", "$FIRE")
+    assert laser.fire() == -4
+    assert "$FIRE" not in laser.ser.written
+    assert any("head 43.0 < 44.0 C" in m for _, m in laser.messages)
+
+
+def test_set_min_temps():
+    c = Centurion.__new__(Centurion)
+    c.set_min_temps({"head": 42.04, "dump": 26})
+    assert c.min_temps == {"head": 420, "dump": 260}
+    c.set_min_temps(None)
+    assert c.min_temps == {}
+    with pytest.raises(ValueError):
+        c.set_min_temps({"haed": 42})                                  # a typo must not disable the check
+
+
+def test_sample_parameters():
+    import os
+    import yaml
+    root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    with open(os.path.join(root, "conf", "parameters.yml.sample")) as f:
+        p = {k: v for doc in yaml.safe_load_all(f) for k, v in (doc or {}).items()}
+    assert p["clf"]["laser_min_temp_c"] == {"head": 42, "dump": 26}
+    assert p["xlf"]["laser_min_temp_c"] == {"head": 44, "dump": 26}
+    c = Centurion.__new__(Centurion)
+    for site in ("clf", "xlf"):
+        c.set_min_temps(p[site]["laser_min_temp_c"])
