@@ -2,8 +2,8 @@
 Shift view of the dashboard: few, clear answers for the night shifter.
 
     - did the scheduled runs start? (done / expected, and which ones)
-    - are the shots on time? (valid timestamps, shot time vs the usual one)
-    - is the laser energy stable? (each run vs the median of the range)
+    - did the laser fire, with good timestamps, on time? (see run_checks)
+    - is the laser energy stable and read? (each run vs the median of the range)
     - is the GPS ok? (fix, holdover, FPGA clock lock)
     - batteries and solar panels
 
@@ -25,6 +25,7 @@ import night_report as nr                               # noqa: E402
 GOOD_PCT_MIN = nr.GOOD_PCT_MIN      # valid shot timestamps per run, % (as the morning report)
 TIMING_DEV_NS = 200                 # shot time vs the median of the same run type, ns
 ENERGY_DEV_PCT = 5.0                # run energy vs the median of the same run type, %
+ENERGY_READ_MIN_PCT = GOOD_PCT_MIN  # shots with a radiometer reading per run, %
 GPS_BAD_MIN_S = nr.GPS_BAD_MIN_S    # GPS without fix / in holdover longer than this: problem
 LOG_GAP_S = nr.LOG_GAP_S            # no new log line for this long during the night: problem
 
@@ -45,21 +46,59 @@ def _median(values):
 
 
 def run_checks(runs):
-    """Per run: timing (valid timestamps, shot time deviation) and energy deviation, each
-    against the median of the runs of the same type in the range. Adds keys to the runs."""
+    """Per run, the shots and the energy, each problem told apart (adds keys to the runs):
+
+    shot_problem   None (ok) or
+                   "not fired"       no shots, or most shots with neither energy nor timestamp
+                   "bad timestamps"  the laser fired (energy) but the FPGA timestamps are
+                                     missing or belong to another shot
+                   "out of time"     valid timestamps, shot time away from the usual one
+    energy_problem None (ok) or
+                   "missing"         radiometer readings missing
+                   "off"             FD/TANK energy away from the median of the same type
+    The usual shot time / energy: median of the runs of the same type in the range.
+    timing_ok / energy_ok: False with a problem, None when not applicable."""
     t_typ = {t: _median([r["t_gps_ms"] for r in runs if r["type"] == t]) for t in SHOT_TYPES}
     p_typ = {t: _median([r["power_median"] for r in runs if r["type"] == t]) for t in ENERGY_TYPES}
     for r in runs:
         r["timing_dev_ns"] = r["energy_dev_pct"] = None
+        r["shot_problem"] = r["shot_detail"] = r["energy_problem"] = r["energy_detail"] = None
         r["timing_ok"] = r["energy_ok"] = None                  # None: not applicable / no data
-        if r["type"] in SHOT_TYPES and r["n_shots"]:
-            if r["t_gps_ms"] is not None and t_typ[r["type"]] is not None:
-                r["timing_dev_ns"] = (r["t_gps_ms"] - t_typ[r["type"]]) * 1e6
-            r["timing_ok"] = (r["good_pct"] is not None and r["good_pct"] >= GOOD_PCT_MIN
-                              and r["timing_dev_ns"] is not None and abs(r["timing_dev_ns"]) <= TIMING_DEV_NS)
+        if r["type"] not in SHOT_TYPES or (not r["n_shots"] and r["status"] in ("killed", "error")):
+            continue                                            # killed / error: told on its own
+        n = r["n_shots"]
+        r["timing_ok"] = True
+        if r["t_gps_ms"] is not None and t_typ[r["type"]] is not None:
+            r["timing_dev_ns"] = (r["t_gps_ms"] - t_typ[r["type"]]) * 1e6
+        no_packet = n - r["n_packet"]
+        no_energy = r["n_power_bad"]
+        if not n:
+            r["shot_problem"], r["shot_detail"] = "not fired", "no shots"
+        elif no_energy * 2 >= n and no_packet * 2 >= n:
+            r["shot_problem"] = "not fired"
+            r["shot_detail"] = f"{no_energy} of {n} shots without energy and timestamp"
+        elif r["good_pct"] is not None and r["good_pct"] < GOOD_PCT_MIN:
+            other = r["n_stale"] + r["n_wrong"]
+            parts = ([f"{no_packet} without timestamp"] if no_packet else []) + \
+                    ([f"{other} with the timestamp of another shot"] if other else [])
+            r["shot_problem"] = "bad timestamps"
+            r["shot_detail"] = " and ".join(parts) + f" (of {n} shots)"
+        elif r["timing_dev_ns"] is not None and abs(r["timing_dev_ns"]) > TIMING_DEV_NS:
+            r["shot_problem"] = "out of time"
+            r["shot_detail"] = f"{r['timing_dev_ns']:+.0f} ns from the usual time"
+        r["timing_ok"] = r["shot_problem"] is None
+        if r["shot_problem"] == "not fired":
+            continue                                            # no energy to look at
+        r["energy_ok"] = True
         if r["type"] in ENERGY_TYPES and r["power_median"] and p_typ[r["type"]]:
             r["energy_dev_pct"] = 100.0 * (r["power_median"] / p_typ[r["type"]] - 1)
-            r["energy_ok"] = abs(r["energy_dev_pct"]) <= ENERGY_DEV_PCT
+            if abs(r["energy_dev_pct"]) > ENERGY_DEV_PCT:
+                r["energy_problem"] = "off"
+                r["energy_detail"] = f"{r['energy_dev_pct']:+.1f} % from the usual"
+        if r["energy_problem"] is None and n and no_energy * 100 > (100 - ENERGY_READ_MIN_PCT) * n:
+            r["energy_problem"] = "missing"
+            r["energy_detail"] = f"{no_energy} of {n} shots without energy reading"
+        r["energy_ok"] = r["energy_problem"] is None
     return runs
 
 
@@ -144,20 +183,21 @@ def summary(expected, runs, refusals, timeref, last_log_t, now, t_from, t_to):
         if r["status"] in ("killed", "error"):
             what = r["status"] + (": " + r["errors"][0][:100] if r["status"] == "error" and r["errors"] else "")
             per_run["failed"].append((BAD, who, what))
-        elif r["status"] == "no shots":
-            per_run["failed"].append((BAD, who, "no shots"))
-        if r["timing_ok"] is False:
-            per_run["timing"].append((WARN, who, f"shots not on time ({_pct(r['good_pct'])} valid timestamps"
-                                      + (f", {r['timing_dev_ns']:+.0f} ns" if r["timing_dev_ns"] is not None else "")
-                                      + ")"))
-        if r["energy_ok"] is False:
-            per_run["energy"].append((WARN, who, f"energy {r['energy_dev_pct']:+.1f} % from the usual"))
+        if r["shot_problem"]:
+            kind = r["shot_problem"]
+            per_run[kind].append((BAD if kind == "not fired" else WARN, who, f"{kind}: {r['shot_detail']}"))
+        if r["energy_problem"]:
+            per_run["energy " + r["energy_problem"]].append((WARN, who, f"energy {r['energy_problem']}: "
+                                                                     f"{r['energy_detail']}"))
     for kind, label in GROUPS:
         problems += _grouped(per_run[kind], label)
 
     timing_runs = [r for r in runs if r["timing_ok"] is not None]
     energy_runs = [r for r in runs if r["energy_ok"] is not None]
-    energy_devs = [r["energy_dev_pct"] for r in energy_runs]
+    dev_runs = [r for r in energy_runs if r["energy_dev_pct"] is not None]
+    energy_devs = [r["energy_dev_pct"] for r in dev_runs]
+    shot_kinds = collections.Counter(r["shot_problem"] for r in timing_runs if r["shot_problem"])
+    energy_kinds = collections.Counter(r["energy_problem"] for r in energy_runs if r["energy_problem"])
 
     gps = None
     if timeref:
@@ -190,21 +230,29 @@ def summary(expected, runs, refusals, timeref, last_log_t, now, t_from, t_to):
             "refused": sum(1 for x in rows if x["state"] == "refused"),
             "manual": sum(1 for x in rows if not x["planned"]),
         },
-        "timing": {"runs": len(timing_runs), "ok": sum(1 for r in timing_runs if r["timing_ok"]),
-                   "good_pct_min": GOOD_PCT_MIN, "dev_max_ns": TIMING_DEV_NS},
-        "energy": {"runs": len(energy_runs), "ok": sum(1 for r in energy_runs if r["energy_ok"]),
+        "shots": {"runs": len(timing_runs), "bad": sum(shot_kinds.values()),
+                  "kinds": {k: shot_kinds[k] for k in SHOT_PROBLEMS},
+                  "good_pct_min": GOOD_PCT_MIN, "dev_max_ns": TIMING_DEV_NS},
+        "energy": {"runs": len(energy_runs), "bad": sum(energy_kinds.values()),
+                   "kinds": {k: energy_kinds[k] for k in ENERGY_PROBLEMS},
                    "spread_pct": (max(energy_devs) - min(energy_devs)) if energy_devs else None,
-                   "dev_max_pct": ENERGY_DEV_PCT},
+                   "dev_max_pct": ENERGY_DEV_PCT, "read_min_pct": ENERGY_READ_MIN_PCT},
         "gps": gps,
         "schedule": [_row_json(x) for x in rows],
         "energy_points": [{"id": r["id"], "type": r["type"], "t": r["start"], "dev": r["energy_dev_pct"],
-                           "ok": r["energy_ok"]} for r in energy_runs],
+                           "ok": r["energy_ok"]} for r in dev_runs],
     }
 
 
-GROUPS = [("missing", "never started"), ("failed", "failed (killed, errors or no shots)"),
-          ("refused", "not started (alarm or another job)"), ("timing", "with shots not on time"),
-          ("energy", "with the energy away from the usual")]
+SHOT_PROBLEMS = ("not fired", "bad timestamps", "out of time")
+ENERGY_PROBLEMS = ("off", "missing")
+GROUPS = [("missing", "never started"), ("failed", "failed (killed or errors)"),
+          ("not fired", "where the laser did not fire"),
+          ("refused", "not started (alarm or another job)"),
+          ("bad timestamps", "with bad timestamps (missing or of another shot)"),
+          ("out of time", "with the shots out of time"),
+          ("energy off", "with the energy away from the usual"),
+          ("energy missing", "with radiometer readings missing")]
 GROUP_MIN = 4       # this many runs with the same problem: one line instead of one per run
 
 
@@ -218,17 +266,15 @@ def _grouped(items, label):
     return [(level, f"{len(items)} runs {label}: {whos}, … (see the run list)")]
 
 
-def _pct(v):
-    return "—" if v is None else f"{v:.0f} %"
-
-
 def _row_json(x):
     r = x["run"]
     out = {"t": x["t"], "type": x["type"], "state": x["state"], "planned": x["planned"]}
     if r:
         out.update({"id": r["id"], "start": r["start"], "status": r["status"], "n_shots": r["n_shots"],
                     "good_pct": r["good_pct"], "timing_ok": r["timing_ok"], "timing_dev_ns": r["timing_dev_ns"],
-                    "energy_ok": r["energy_ok"], "energy_dev_pct": r["energy_dev_pct"]})
+                    "shot_problem": r["shot_problem"], "shot_detail": r["shot_detail"],
+                    "energy_ok": r["energy_ok"], "energy_dev_pct": r["energy_dev_pct"],
+                    "energy_problem": r["energy_problem"], "energy_detail": r["energy_detail"]})
     if x["refusal"]:
         f = x["refusal"]
         out["why"] = ("alarm " + ", ".join(f["alarms"])) if f["reason"] == "alarm" else "another job running"

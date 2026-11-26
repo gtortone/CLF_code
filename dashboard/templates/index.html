@@ -348,7 +348,9 @@ function renderShift(d) {
     ? "<ul>" + d.problems.map(p => `<li class="st st-${p.level}">${esc(p.text)}</li>`).join("") + "</ul>"
     : `<div class="hint">Runs started as scheduled, shots on time, laser energy stable, GPS ok.</div>`);
 
-  const r = d.runs, tm = d.timing, en = d.energy, g = d.gps;
+  const r = d.runs, sh = d.shots, en = d.energy, g = d.gps;
+  // breakdown of the problems of a tile: "2 not fired · 1 bad timestamps" (only the non-zero ones)
+  const kinds = (k, fmtName = n => n) => Object.entries(k).filter(([, n]) => n).map(([name, n]) => `${n} ${fmtName(name)}`).join(" · ");
   const types = Object.entries(r.by_type).map(([t, c]) => `${t} ${c.started}/${c.expected}`).join(" · ");
   const later = r.expected - r.expected_so_far;
   const runNote = (types || "no runs scheduled") + (later > 0 ? ` · ${later} still to come` : "") +
@@ -359,10 +361,14 @@ function renderShift(d) {
       : g.lock_lost ? ` · FPGA clock lost lock ${g.lock_lost}×` : "");
   document.getElementById("s-tiles").innerHTML = [
     tile("Runs started", r.expected ? `${r.started} / ${r.expected_so_far}` : "—", runLevel, runNote),
-    tile("Shots on time", tm.runs ? `${tm.ok} / ${tm.runs} runs` : "—", !tm.runs ? "none" : tm.ok === tm.runs ? "ok" : "warn",
-         `≥ ${tm.good_pct_min} % valid timestamps, within ±${tm.dev_max_ns} ns`),
-    tile("Laser energy stable", en.runs ? `${en.ok} / ${en.runs} runs` : "—", !en.runs ? "none" : en.ok === en.runs ? "ok" : "warn",
-         en.runs ? `spread ${fmt(en.spread_pct)} % · limit ±${en.dev_max_pct} % (FD, TANK)` : "no FD/TANK run"),
+    // problems first: "1 / 31" = 1 run with a problem out of the 31 with shots
+    tile("Runs with shot problems", sh.runs ? `${sh.bad} / ${sh.runs}` : "—",
+         !sh.runs ? "none" : !sh.bad ? "ok" : sh.kinds["not fired"] ? "bad" : "warn",
+         sh.bad ? kinds(sh.kinds) : `fired, ≥ ${sh.good_pct_min} % good timestamps, within ±${sh.dev_max_ns} ns`),
+    tile("Runs with energy problems", en.runs ? `${en.bad} / ${en.runs}` : "—",
+         !en.runs ? "none" : !en.bad ? "ok" : "warn",
+         en.bad ? kinds(en.kinds, n => n === "off" ? `off by > ±${en.dev_max_pct} %` : "with readings missing")
+                : en.spread_pct !== null ? `spread ${fmt(en.spread_pct)} % · limit ±${en.dev_max_pct} % (FD, TANK)` : "readings ok"),
     tile("GPS", !g ? "—" : g.ok ? "OK" : "check", !g ? "none" : g.ok ? "ok" : "bad", gpsNote),
   ].join("");
 
@@ -370,7 +376,7 @@ function renderShift(d) {
   const cell = (ok, text) => ok === null || ok === undefined ? `<td class=muted>—</td>`
     : `<td class="st st-${ok ? "ok" : "warn"}">${text}</td>`;
   document.getElementById("s-sched").innerHTML =
-    "<tr><th>UTC</th><th>Run</th><th>State</th><th class=num>Shots</th><th>Shots on time</th><th>Energy vs usual</th></tr>" +
+    "<tr><th>UTC</th><th>Run</th><th>State</th><th class=num>Shots</th><th>Laser &amp; timestamps</th><th>Energy vs usual</th></tr>" +
     d.schedule.map(x => {
       const [lvl, label] = STATE[x.state];
       const when = multi ? iso(x.t).slice(5, 16) : hhmm(x.t);
@@ -379,8 +385,10 @@ function renderShift(d) {
       if (x.status && x.status !== "ok" && x.state !== "running") stateText += ` (${x.status})`;
       return `<tr${x.id ? ` class=click data-id="${esc(x.id)}"` : ""}><td>${when}${late}</td><td>${x.type}</td>` +
         `<td class="st st-${lvl}">${stateText}</td><td class=num>${x.n_shots ?? "—"}</td>` +
-        cell(x.timing_ok, x.timing_ok ? "ok" : `${fmt(x.good_pct, 0)} % valid, ${sign(x.timing_dev_ns, 0)} ns`) +
-        cell(x.energy_ok, `${sign(x.energy_dev_pct)} %`) + "</tr>";
+        (x.shot_problem === "not fired" ? `<td class="st st-bad">not fired: ${esc(x.shot_detail)}</td>`
+          : cell(x.timing_ok, x.timing_ok ? "ok" : `${x.shot_problem}: ${esc(x.shot_detail)}`)) +
+        cell(x.energy_ok, x.energy_problem === "missing" ? `missing: ${esc(x.energy_detail)}`
+                          : x.energy_dev_pct === null ? "ok" : `${sign(x.energy_dev_pct)} %`) + "</tr>";
     }).join("");
   document.querySelectorAll("#s-sched tr.click").forEach(tr => tr.addEventListener("click", () => openRun(tr.dataset.id)));
 
