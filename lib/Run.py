@@ -12,6 +12,7 @@ from lib.Hardware import get_profile, trigger_delay_ticks
 from lib.GpsTime import unix_to_gps
 from lib import TimeSync
 from lib.Radiometer import read_powers
+from lib import ShotsCsv
 
 class RunType(Enum):
     RAMAN = 1,
@@ -43,6 +44,13 @@ class RunBase:
             handler.setFormatter(formatter)
             self.logger.addHandler(handler)
         self.log = partial(self.logger.log, extra={'classname': self.__class__.__name__})
+
+        # logs/shots.csv (one row per shot); run_id is set again by RunManager.submit
+        # from the "start <TYPE> run" line, as the dashboard does
+        self.shots_csv = ShotsCsv.shots_logger()
+        self.run_type = self.__class__.__name__[3:].upper()        # RunFD -> FD, RunCalib -> CALIB
+        self.run_id = f"{self.run_type}-{int(time.time())}"
+        self.series = ""                                          # calibration: energy, pol0, ...
 
     @property
     def energy_ticks(self):
@@ -117,6 +125,12 @@ class RunBase:
         gps_seconds = unix_to_gps(seconds) if seconds else 0
         self.log(logging.INFO, f'power {i} shot: {power}, gps_seconds: {gps_seconds}, counter: {counter}, '
                                f'pps distance: {pps}ns, counter cycle: {counter_cycles}{extra}', stacklevel=2)
+        try:
+            powers = dict(zip([radiometer, *also], [power, *other_powers]))
+            self.shots_csv.info(ShotsCsv.row(self.run_id, self.run_type, self.series, i, gps_seconds,
+                                             counter, pps, counter_cycles, powers))
+        except Exception as e:          # the CSV is a copy for the analyses: never stop a run
+            self.log(logging.ERROR, f"shots.csv not written: {e}")
 
     LASER_READY_TIMEOUT_S = 600     # TEC/diodes conditioning in STANDBY until fire authorization
 
@@ -1023,6 +1037,7 @@ class RunCalib(RunBase):
         self.dc.fpga.write_dio('laser_en', 1)
         self.start_shots('Rad3', 'Rad1')       # flush stale timestamps and readings, then laser_start
 
+        self.series = "energy"
         self.log(logging.INFO, "Starting energy calibration measurements...")
         for i in range(self.nshots):
             self.log_shot(i, 'Rad3', also=('Rad1',))
@@ -1034,6 +1049,7 @@ class RunCalib(RunBase):
         self.dc.fpga.write_dio('laser_en', 1)
         self.start_shots('Rad3', 'Rad1')       # flush stale timestamps and readings, then laser_start
         
+        self.series = "pol0"
         self.log(logging.INFO, "Starting polarization calibration measurements at 0 deg...")
         for i in range(self.nshots):
             self.log_shot(i, 'Rad3', also=('Rad1',))
@@ -1043,6 +1059,7 @@ class RunCalib(RunBase):
         self.dc.fpga.write_dio('laser_en', 1)
         self.start_shots('Rad3', 'Rad1')       # flush stale timestamps and readings, then laser_start
 
+        self.series = "pol90"
         self.log(logging.INFO, "Starting polarization calibration measurements at 90 deg...")
         for i in range(self.nshots):
             self.log_shot(i, 'Rad3', also=('Rad1',))
@@ -1052,6 +1069,7 @@ class RunCalib(RunBase):
         self.dc.fpga.write_dio('laser_en', 1)
         self.start_shots('Rad3', 'Rad1')       # flush stale timestamps and readings, then laser_start
 
+        self.series = "pol180"
         self.log(logging.INFO, "Starting polarization calibration measurements at 180 deg...")
         for i in range(self.nshots):
             self.log_shot(i, 'Rad3', also=('Rad1',))

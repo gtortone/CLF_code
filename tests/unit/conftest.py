@@ -32,4 +32,6 @@ class _NoFileHandler(logging.NullHandler):
         super().__init__()
 
 
+# kept for the tests of handlers that must write a real file (tmp_path)
+REAL_TIMED_ROTATING_FILE_HANDLER = logging.handlers.TimedRotatingFileHandler
 logging.handlers.TimedRotatingFileHandler = _NoFileHandler

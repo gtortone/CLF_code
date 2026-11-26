@@ -2,6 +2,7 @@
 import sys
 import os
 import time
+import calendar
 import logging
 import threading
 import multiprocessing
@@ -181,9 +182,13 @@ class RunManager:
             self.log(logging.ERROR, f"{name} run cannot start: unknown run type")
             return False
 
+        started = time.time()
         self.log(logging.INFO, f"start {name} run")
         self.runentry = runentry
         self.run = run_class(self.dc, self.params)
+        # = run id of the dashboard, which reads the local time of this run.log line as UTC
+        # (the same number on a PC in UTC)
+        self.run.run_id = f"{name}-{calendar.timegm(time.localtime(started))}"
 
         if source == 'runmanager':
             # scheduled: keep the instruments on between the runs of the night, finish
