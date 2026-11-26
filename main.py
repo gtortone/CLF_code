@@ -87,6 +87,82 @@ class App(cmd2.Cmd):
             return
         self.fpga_time_ensure()
 
+    ## dio ##
+
+    dio_parser = cmd2.Cmd2ArgumentParser()
+    dio_parser.add_argument('action', nargs='?', choices=['watch'],
+                            help="watch: print only the changes, for SECONDS")
+    dio_parser.add_argument('seconds', nargs='?', type=int, default=60,
+                            help="duration of watch (default 60 s)")
+
+    DIO_GROUPS = (
+        ("covers and rain (DB25 inputs)", ("cover_raman_closed", "cover_raman_open", "cover_steer_closed",
+                                           "cover_steer_open", "rain", "norain")),
+        ("outputs", ("inverter", "flipper_steer", "flipper_raman", "flipper_atten")),
+        ("laser control", ("laser_start", "laser_en", "timestamp_en")),
+        ("time reference", ("pps_present",)),
+    )
+
+    def dio_snapshot(self):
+        """{name: (register, bit, inverted, raw pin, value)}, {register: raw value}: each
+        register read once (mapping of lib/FPGADevice.py + conf/<site>/dio.yml)."""
+        fpga, regs, snap = self.dc.fpga, {}, {}
+        for _, names in self.DIO_GROUPS:
+            for name in names:
+                io = fpga.iomap[name]
+                addr, bit, inv = io.get_addr(), io.get_bit(), io.get_inverted()
+                if addr not in regs:
+                    regs[addr] = fpga.read_address(addr)
+                raw = bool((regs[addr] >> bit) & 1)
+                snap[name] = (addr, bit, inv, raw, raw != inv)
+        return snap, regs
+
+    @staticmethod
+    def dio_warnings(snap):
+        w = []
+        if snap["rain"][4] == snap["norain"][4]:
+            w.append("rain and norain are equal: sensor fault or wiring (counts as rain alarm)")
+        for c in ("raman", "steer"):
+            if snap[f"cover_{c}_open"][4] and snap[f"cover_{c}_closed"][4]:
+                w.append(f"cover {c}: open and closed both true (wiring or limit switches)")
+        return w
+
+    @cmd2.with_category('System Control')
+    @cmd2.with_argparser(dio_parser)
+    def do_dio(self, args):
+        """state of the FPGA digital I/O (covers, rain, flippers, inverter, laser): read only"""
+        utc = lambda: time.strftime("%H:%M:%S", time.gmtime())
+        try:
+            snap, regs = self.dio_snapshot()
+            if args.action != 'watch':
+                for title, names in self.DIO_GROUPS:
+                    print(f"{title}:")
+                    for n in names:
+                        addr, bit, inv, raw, value = snap[n]
+                        print(f"  {n:<20} {str(value):<5}  (reg 0x{addr:02X} bit {bit}, pin {int(raw)}"
+                              f"{', inverted' if inv else ''})")
+                print("raw registers: " + ", ".join(f"0x{a:02X} = {v:08b}" for a, v in sorted(regs.items())))
+                for w in self.dio_warnings(snap):
+                    print(f"WARNING: {w}")
+                return
+            # watch: only the changes (Ctrl-C is disabled in the CLI: fixed duration)
+            seconds = max(1, args.seconds)
+            print(f"watching the digital I/O for {seconds} s: changes only (UTC)")
+            end, changes = time.monotonic() + seconds, 0
+            while time.monotonic() < end:
+                time.sleep(0.5)
+                cur, _ = self.dio_snapshot()
+                for n, (addr, bit, _, raw, value) in cur.items():
+                    if value != snap[n][4]:
+                        print(f"{utc()}  {n}: {snap[n][4]} -> {value}  (reg 0x{addr:02X} bit {bit}, pin {int(raw)})")
+                        changes += 1
+                for w in set(self.dio_warnings(cur)) - set(self.dio_warnings(snap)):
+                    print(f"{utc()}  WARNING: {w}")
+                snap = cur
+            print(f"done, {changes} change(s)")
+        except (IOError, TimeoutError) as e:
+            print(f"E: FPGA read failed: {e}")
+
     ## mode ##
 
     mode_parser = cmd2.Cmd2ArgumentParser()
