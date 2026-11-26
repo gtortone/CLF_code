@@ -19,6 +19,7 @@ clf:
   start_minutes: [5, 20, 35, 50]
   tank_name: celeste
   warmup_before_min: 30       # laser warm-up run before the first run of the night (0 = none)
+  #warmup_max_min: 15         # warm-up test shots stop at stable energy, or after this (default 15)
   # the laser reports READY too early (pump head ~39 C): runs wait for these too (C);
   # names: head (pump head), dump (dump resistor), plate (interface plate); omitted = not checked
   laser_min_temp_c: {head: 42, dump: 26}
