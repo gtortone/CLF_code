@@ -26,6 +26,12 @@ class DeviceCollection:
         # hardware profile: clock for the timestamp conversion, firmware version check
         self.hw = get_profile(cfg.parameters)
         self.data.tick_ns = self.hw.tick_ns
+        # laser: minimum temperatures to fire well (READY comes earlier), per site
+        site = cfg.parameters[str.lower(cfg.parameters['identity'])]
+        self.laser.set_min_temps(site.get('laser_min_temp_c'))
+        logging.getLogger("run").info(
+            f"laser minimum temperatures to fire: {site.get('laser_min_temp_c') or 'none'} (C)",
+            extra={'classname': 'DeviceCollection'})
         self.fpga.apply_dio_map(getattr(cfg, 'dio', {}))      # site wiring (conf/<site>/dio.yml)
         fw = check_firmware(self.fpga, self.hw)
         build = firmware_build(self.fpga)
