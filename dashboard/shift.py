@@ -159,9 +159,20 @@ def _run_state(run, now):
 
 
 def summary(expected, runs, refusals, timeref, last_log_t, now, t_from, t_to):
-    """Answers of the shift view, with an overall level and the list of problems."""
+    """Answers of the shift view, with an overall level and the list of problems.
+
+    Only the scheduled runs: the ones started by hand (tests on site) are left out, marked
+    "(manual)" in run.log or, in older logs, not matching any run of the calendar; they are
+    only counted in runs.manual (the Details tab still shows them)."""
+    by_hand = [r for r in runs if r.get("manual")]
+    runs = [r for r in runs if not r.get("manual")]
+    refusals = [f for f in refusals if not f.get("manual")]
     run_checks(runs)
     rows = schedule(expected, runs, refusals, now)
+    by_hand += [x["run"] for x in rows if not x["planned"]]
+    rows = [x for x in rows if x["planned"]]
+    planned_runs = {id(x["run"]) for x in rows if x["run"]}
+    runs = [r for r in runs if id(r) in planned_runs]
     problems = []                   # (level, text)
     per_run = collections.defaultdict(list)     # kind -> [(level, "FD 01:20", detail)]
 
@@ -228,7 +239,7 @@ def summary(expected, runs, refusals, timeref, last_log_t, now, t_from, t_to):
                         for t in nr.RUN_TYPES if exp[t] or started[t]},
             "missing": len(missing),
             "refused": sum(1 for x in rows if x["state"] == "refused"),
-            "manual": sum(1 for x in rows if not x["planned"]),
+            "manual": len(by_hand),
         },
         "shots": {"runs": len(timing_runs), "bad": sum(shot_kinds.values()),
                   "kinds": {k: shot_kinds[k] for k in SHOT_PROBLEMS},
