@@ -173,24 +173,27 @@ class RunManager:
         if not isinstance(runentry, RunEntry):
             raise TypeError
         name = runentry.runtype.name
+        # runs started by hand: "FD run (manual)" in run.log, so that the Shift tab of the
+        # dashboard leaves them out (tests on site must not look like problems to the shifter)
+        what = f"{name} run" + ("" if source == 'runmanager' else " (manual)")
 
         # self.runentry / self.run describe the job in progress: update them only when a new job starts
         if self.job_is_running():
-            self.log(logging.ERROR, f"{name} run cannot start due to other job running ({self.runentry.runtype.name})")
+            self.log(logging.ERROR, f"{what} cannot start due to other job running ({self.runentry.runtype.name})")
             return False
 
         alarms = self.hk.get_alarm()
         if len(alarms) > 0:
-            self.log(logging.ERROR, f"{name} run cannot start due to alarms {alarms}")
+            self.log(logging.ERROR, f"{what} cannot start due to alarms {alarms}")
             return False
 
         run_class = self.RUN_CLASSES.get(runentry.runtype)
         if run_class is None:
-            self.log(logging.ERROR, f"{name} run cannot start: unknown run type")
+            self.log(logging.ERROR, f"{what} cannot start: unknown run type")
             return False
 
         started = time.time()
-        self.log(logging.INFO, f"start {name} run")
+        self.log(logging.INFO, f"start {what}")
         self.runentry = runentry
         self.run = run_class(self.dc, self.params)
         # = run id of the dashboard, which reads the local time of this run.log line as UTC

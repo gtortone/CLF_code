@@ -354,7 +354,7 @@ function renderShift(d) {
   const types = Object.entries(r.by_type).map(([t, c]) => `${t} ${c.started}/${c.expected}`).join(" · ");
   const later = r.expected - r.expected_so_far;
   const runNote = (types || "no runs scheduled") + (later > 0 ? ` · ${later} still to come` : "") +
-                  (r.manual ? ` · ${r.manual} started by hand` : "");
+                  (r.manual ? ` · ${r.manual} started by hand (tests, not shown)` : "");
   const runLevel = !r.expected ? "none" : r.missing ? "bad" : r.refused ? "warn" : "ok";
   const gpsNote = !g ? "no housekeeping data" :
     `fix ${fmt(g.good_pct)} % of the time` + (g.lock_lost === 0 ? " · FPGA clock locked"

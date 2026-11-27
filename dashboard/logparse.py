@@ -33,8 +33,8 @@ HK_RE = re.compile(r"^(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d),(\d{3}) - housekeeping - 
 HK_FIELD_RE = re.compile(r"(\w+)=([^\[\s]*)\[([^\]]*)\]")
 SHOT_RE = re.compile(r"^power (\d+) shot:\s*(\S*), (gps_seconds|seconds): (\d+), counter: ([-\d.eE+]+), "
                      r"pps distance: (-?[\d.eE+]+)ns, counter cycle: (\d+)")
-SUBMIT_RE = re.compile(r"^start (\w+) run$")
-REFUSE_RE = re.compile(r"^(\w+) run cannot start due to (alarms|other job running)")
+SUBMIT_RE = re.compile(r"^start (\w+) run( \(manual\))?$")         # (manual): started by hand (cli)
+REFUSE_RE = re.compile(r"^(\w+) run( \(manual\))? cannot start due to (alarms|other job running)")
 ALARM_NAME_RE = re.compile(r"'name': '(\w+)'")
 KILL_RE = re.compile(r"^(\w+) run killed")
 
@@ -196,13 +196,13 @@ def parse_runs(log_dir, t_from=None):
                     runs.append(_summarise(cur))
                 cur = {"id": f"{m.group(1)}-{int(t)}", "type": m.group(1), "start": t, "end": t,
                        "prepare_s": None, "laser_setup_s": None, "fire_auth_s": None,
-                       "errors": [], "killed": False, "_shots": []}
+                       "errors": [], "killed": False, "_shots": [], "manual": bool(m.group(2))}
                 pending_step = None
                 continue
             m = REFUSE_RE.match(msg)
             if m:
-                refusals.append({"t": t, "type": m.group(1),
-                                 "reason": "alarm" if m.group(2) == "alarms" else "busy",
+                refusals.append({"t": t, "type": m.group(1), "manual": bool(m.group(2)),
+                                 "reason": "alarm" if m.group(3) == "alarms" else "busy",
                                  "alarms": sorted(set(ALARM_NAME_RE.findall(msg)))})
                 continue
             m = KILL_RE.match(msg)

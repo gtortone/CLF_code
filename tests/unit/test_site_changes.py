@@ -36,9 +36,9 @@ def test_clf_dio_map(fpga):
         fpga.apply_dio_map(yaml.safe_load(f))
     m = fpga.iomap
     assert (m["rain"].regaddr, m["rain"].bit) == (0x16, 2)
-    assert (m["norain"].regaddr, m["norain"].bit) == (0x16, 3)
+    assert (m["norain"].regaddr, m["norain"].bit) == (0x16, 5)
     assert (m["cover_steer_closed"].bit, m["cover_steer_closed"].inverted) == (4, True)
-    assert (m["cover_steer_open"].bit, m["cover_steer_open"].inverted) == (5, True)
+    assert (m["cover_steer_open"].bit, m["cover_steer_open"].inverted) == (3, True)
     assert m["cover_raman_open"].bit == 1                    # not overridden
 
 

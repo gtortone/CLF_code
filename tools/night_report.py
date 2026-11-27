@@ -253,8 +253,9 @@ def main():
 
     expected = expected_runs(params, t0, t1)
     runs_all, refusals_all, _ = lp.parse_runs(args.logs, t0 - 86400)    # not years of old logs
-    runs = [r for r in runs_all if t0 <= r["start"] < t1]
-    refusals = [f for f in refusals_all if t0 <= f["t"] < t1]
+    # only the scheduled runs: the ones started by hand ("(manual)" in run.log) are tests
+    runs = [r for r in runs_all if t0 <= r["start"] < t1 and not r.get("manual")]
+    refusals = [f for f in refusals_all if t0 <= f["t"] < t1 and not f.get("manual")]
     _, events = lp.parse_events(args.logs, t0, t1)
     last_log_t = lp.latest_time(args.logs)
     timeref = time_ref_summary(lp.hk_rows(args.logs, t0, t1))

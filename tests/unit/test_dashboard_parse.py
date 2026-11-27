@@ -58,7 +58,7 @@ def test_runs_old_and_new_format(logs):
     assert new["n_power_bad"] == 1                                   # nan
     assert new["status"] == "killed"
     assert refusals == [{"t": pytest.approx(lp._epoch("2025-12-13 01:50:00", "000")), "type": "TANK",
-                         "reason": "alarm", "alarms": ["rain"]}]
+                         "manual": False, "reason": "alarm", "alarms": ["rain"]}]
 
 
 def test_hk_values_and_invalid(logs):
@@ -118,3 +118,17 @@ def test_warmup_shots_logged_from_a_list_comprehension(tmp_path):
     (tmp_path / "run.log").write_text("\n".join(lines) + "\n")
     runs, _, _ = lp.parse_runs(str(tmp_path))
     assert runs[0]["type"] == "WARMUP" and runs[0]["n_shots"] == 3 and runs[0]["status"] == "ok"
+
+
+def test_runs_started_by_hand_are_marked(tmp_path):
+    (tmp_path / "run.log").write_text(
+        "2026-11-27 01:00:00,000 - RunManager::submit - INFO - start FD run\n"
+        "2026-11-27 01:10:00,000 - RunManager::submit - INFO - start FD run (manual)\n"
+        "2026-11-27 01:20:00,000 - RunManager::submit - ERROR - CALIB run (manual) cannot start due to "
+        "alarms [{'dev': 'dio', 'name': 'rain', 'value': True}]\n"
+        "2026-11-27 01:30:00,000 - RunManager::submit - ERROR - FD run cannot start due to other job running (FD)\n")
+    runs, refusals, _ = lp.parse_runs(str(tmp_path))
+    assert [(r["type"], r["manual"]) for r in runs] == [("FD", False), ("FD", True)]
+    assert [(f["type"], f["manual"], f["reason"]) for f in refusals] == [("CALIB", True, "alarm"),
+                                                                       ("FD", False, "busy")]
+    assert refusals[0]["alarms"] == ["rain"]

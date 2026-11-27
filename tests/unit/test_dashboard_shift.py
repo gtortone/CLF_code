@@ -159,7 +159,20 @@ def test_api_shift(tmp_path, monkeypatch):
     c = dash.app.test_client()
     d = c.get("/api/shift").get_json()
     assert d["night"] == "2025-11-24" and d["latest_night"] == "2025-11-24"
-    assert [(x["type"], x["state"]) for x in d["schedule"]] == [("FD", "manual")]
+    assert d["schedule"] == [] and d["runs"]["manual"] == 1      # no calendar: not a scheduled run
     assert c.get("/api/shift?night=2025-11-23").get_json()["schedule"] == []
     assert c.get("/api/shift?night=bad").status_code == 400
     assert c.get("/api/data?days=3").status_code == 200
+
+
+def test_runs_started_by_hand_are_left_out():
+    expected = [(T, "FD"), (T + 900, "FD")]
+    test = dict(run("FD", T + 870, status="error"), manual=True)        # by hand, near a scheduled one
+    runs = [run("FD", T + 2), test, run("TANK", T + 5000, good=10.0)]  # TANK: old log, not in calendar
+    refusals = [{"t": T + 880, "type": "FD", "manual": True, "reason": "alarm", "alarms": ["rain"]}]
+    s = shift.summary(expected, runs, refusals, None, last_log_t=T + 7100, now=T + 7200,
+                      t_from=T - 3600, t_to=T + 80000)
+    # the test does not take the place of the scheduled FD, which is missing
+    assert [(x["type"], x["state"]) for x in s["schedule"]] == [("FD", "done"), ("FD", "missing")]
+    assert s["runs"]["manual"] == 2 and s["shots"]["runs"] == 1 and s["shots"]["bad"] == 0
+    assert [p["text"] for p in s["problems"]] == [f"FD {shift.nr.utc(T + 900)} never started"]
