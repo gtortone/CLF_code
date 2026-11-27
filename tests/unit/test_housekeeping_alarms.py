@@ -84,5 +84,41 @@ def test_battery_out_of_range(identity):
     set_values(h, rain=False)
     battery = next(d for d in h.data if d['name'] == 'battery1')
     battery['value'] = battery['min'] - 0.5
+    for _ in range(battery.get('alarm_after', 1)):
+        h.check_alarm()
+    assert [a['name'] for a in h.get_alarm()] == ["battery1"]
+
+
+@pytest.mark.parametrize("identity", ["clf", "xlf"])
+def test_battery_single_dip_is_no_alarm(identity):
+    h = make_hk(identity)
+    set_values(h, rain=False)
+    battery = next(d for d in h.data if d['name'] == 'battery1')
+    assert battery['alarm_after'] > 1
+    nominal = battery['value']
+    for _ in range(battery['alarm_after'] - 1):          # dips shorter than alarm_after cycles
+        battery['value'] = battery['min'] - 1
+        h.check_alarm()
+        assert h.get_alarm() == []
+    battery['value'] = nominal                           # back: the count starts again
+    h.check_alarm()
+    battery['value'] = battery['min'] - 1
+    h.check_alarm()
+    assert h.get_alarm() == []
+
+
+@pytest.mark.parametrize("identity", ["clf", "xlf"])
+def test_battery_alarm_clears_only_above_the_hysteresis(identity):
+    h = make_hk(identity)
+    set_values(h, rain=False)
+    battery = next(d for d in h.data if d['name'] == 'battery1')
+    battery['value'] = battery['min'] - 1
+    for _ in range(battery['alarm_after']):
+        h.check_alarm()
+    assert [a['name'] for a in h.get_alarm()] == ["battery1"]
+    battery['value'] = battery['min'] + battery['hysteresis'] / 2     # just above min: still alarm
     h.check_alarm()
     assert [a['name'] for a in h.get_alarm()] == ["battery1"]
+    battery['value'] = battery['min'] + battery['hysteresis'] * 2
+    h.check_alarm()
+    assert h.get_alarm() == []

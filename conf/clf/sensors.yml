@@ -8,6 +8,8 @@
   scalar: 0
   min: 11.5
   max: 16
+  alarm_after: 6               # 6 cycles (1 min) out of range before the alarm
+  hysteresis: 0.2              # V: once in alarm, clears above min + 0.2 V
   alarm: False
 
 - dev: tla
@@ -19,6 +21,8 @@
   scalar: 0
   min: 11.5
   max: 16
+  alarm_after: 6               # 6 cycles (1 min) out of range before the alarm
+  hysteresis: 0.2              # V: once in alarm, clears above min + 0.2 V
   alarm: False
 
 - dev: tla
