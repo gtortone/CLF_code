@@ -222,11 +222,10 @@ class HouseKeeping:
                         d['alarm'] = bool(d['value'])
                         if d['alarm']:
                             alarm_data.append(d)
-                    elif (d['value'] < d['min']) or (d['value'] > d['max']):
-                        d['alarm'] = True
-                        alarm_data.append(d)
                     else:
-                        d['alarm'] = False
+                        d['alarm'] = self.range_alarm(d)
+                        if d['alarm']:
+                            alarm_data.append(d)
                 elif d['dev'] == 'dio':
                     if d['name'] == 'rain':
                         if d['value'] or d['error']:
@@ -258,6 +257,30 @@ class HouseKeeping:
         self.alarm_data = alarm_data
         if len(alarm_data):
             self.notify_subscribers(alarm_data)
+
+    def range_alarm(self, d):
+        """min/max alarm of an analog value (batteries) with two optional keys of sensors.yml:
+        alarm_after: N  -- alarm only after N consecutive cycles (10 s) out of range, so a
+                           single dip does not abort the run / shut the instruments down;
+        hysteresis: H   -- once in alarm, it clears only inside [min + H, max - H]."""
+        v = d['value']
+        if d.get('alarm'):
+            h = d.get('hysteresis', 0)
+            out = v < d['min'] + h or v > d['max'] - h
+        else:
+            out = v < d['min'] or v > d['max']
+        d['out_cycles'] = d.get('out_cycles', 0) + 1 if out else 0
+        if d.get('alarm'):
+            alarm = out
+            if not alarm:
+                self.log.info(f"{d['name']}={v} back within limits, alarm cleared")
+        else:
+            need = d.get('alarm_after', 1)
+            alarm = d['out_cycles'] >= need
+            if out and not alarm:
+                self.log.warning(f"{d['name']}={v} outside [{d['min']}, {d['max']}]: alarm if it "
+                                 f"persists ({d['out_cycles']}/{need} cycles)")
+        return alarm
 
     def get_alarm(self):
         return self.alarm_data
