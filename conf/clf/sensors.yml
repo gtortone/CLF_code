@@ -42,7 +42,7 @@
   channel: 7
   value: 0
   unit: V
-  coeff: 0.014535379
+  coeff: 0.018135991
   scalar: 0
 
 - dev: ltc
